@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ambiloop — ambient audio layer composer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <span class="logo">ambiloop</span>
+  <span class="subtitle">ambient audio layer composer</span>
+  <div class="header-actions">
+    <button id="exportBtn" disabled>Export WAV</button>
+  </div>
+</header>
+
+<div id="dropZone" class="drop-zone">
+  <div class="drop-message">
+    <span class="drop-icon">+</span>
+    <span>Drop audio files here or click to browse</span>
+    <span class="drop-formats">MP3, WAV, OGG, FLAC</span>
+  </div>
+  <input type="file" id="fileInput" multiple accept="audio/*" hidden>
+</div>
+
+<main>
+  <div id="layersPanel" class="layers-panel">
+    <div class="panel-header">
+      <h2>Layers</h2>
+      <span id="layerCount" class="count">0</span>
+    </div>
+    <div id="layerList" class="layer-list">
+      <div class="empty-state">Drop audio files to begin</div>
+    </div>
+  </div>
+
+  <div id="timeline" class="timeline">
+    <div class="panel-header">
+      <h2>Timeline</h2>
+    </div>
+    <div id="timelineContent" class="timeline-content">
+      <div class="empty-state">Add layers to see the timeline</div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="transport">
+    <button id="playBtn" disabled title="Play all layers">&#9654; Play</button>
+    <button id="stopBtn" disabled title="Stop">&#9632; Stop</button>
+  </div>
+  <div id="statusBar" class="status-bar">Ready</div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
