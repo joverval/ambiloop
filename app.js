@@ -250,7 +250,7 @@ function renderLayers() {
           </div>
         </div>
       </div>
-      ${l.rawSpectrum ? `<canvas class="spectrum-canvas" data-spectrum-id="${l.id}" width="260" height="32"></canvas>` : ''}
+      ${l.rawSpectrum ? `<canvas class="spectrum-canvas" data-spectrum-id="${l.id}" width="260" height="52"></canvas>` : ''}
     </div>
     `;
   }).join('');
@@ -356,7 +356,7 @@ function formatTime(sec) {
 
 // ── Frequency spectrum visualization ──────────────────
 async function computeSpectrum(buffer, trimStart, trimEnd) {
-  // Yield to event loop so UI stays responsive during DFT
+  // Yield to event loop so UI stays responsive
   await new Promise(r => setTimeout(r, 0));
 
   const sr = buffer.sampleRate;
@@ -364,36 +364,38 @@ async function computeSpectrum(buffer, trimStart, trimEnd) {
   const endSample = Math.floor(Math.min(trimEnd, buffer.duration) * sr);
   const rawData = buffer.getChannelData(0);
   const len = endSample - startSample;
-  if (len < 64) return null;
+  if (len < 64) return { spectrum: null, binFreqs: null };
 
-  // Downsample to ~2048 samples for fast DFT computation
-  const targetLen = 2048;
-  const step = Math.max(1, Math.floor(len / targetLen));
-  const dlen = Math.floor((len - 1) / step) + 1;
-  const downsampled = new Float32Array(dlen);
-  for (let i = 0, j = startSample; i < dlen; i++, j += step) {
-    downsampled[i] = rawData[Math.min(j, endSample - 1)];
-  }
-
-  // Direct DFT at 40 log-spaced frequency bins
   const numBins = 40;
   const nyquist = sr / 2;
-  const effSr = sr / step;
-  const effNyquist = effSr / 2;
   const spectrum = new Float32Array(numBins);
   const binFreqs = new Float32Array(numBins);
 
+  // Compute one DFT bin at a time using Goertzel algorithm
+  // (no trig inside the sample loop -- fast even for long files)
+  // Yield every 4 bins so the UI stays responsive.
   for (let i = 0; i < numBins; i++) {
-    const freq = Math.min(20 * Math.pow(nyquist / 20, i / (numBins - 1)), effNyquist * 0.95);
+    const freq = 20 * Math.pow(nyquist / 20, i / (numBins - 1));
     binFreqs[i] = freq;
-    let real = 0, imag = 0;
-    for (let j = 0; j < dlen; j++) {
-      const phase = 2 * Math.PI * freq * j / effSr;
-      real += downsampled[j] * Math.cos(phase);
-      imag -= downsampled[j] * Math.sin(phase);
+
+    const omega = 2 * Math.PI * freq / sr;
+    const coeff = 2 * Math.cos(omega);
+    let s0 = 0, s1 = 0, s2 = 0;
+
+    for (let j = startSample; j < endSample; j++) {
+      s0 = coeff * s1 - s2 + rawData[j];
+      s2 = s1;
+      s1 = s0;
     }
-    const magnitude = Math.sqrt(real * real + imag * imag) / dlen;
+
+    const real = s1 - s2 * Math.cos(omega);
+    const imag = s2 * Math.sin(omega);
+    const magnitude = Math.sqrt(real * real + imag * imag) / len;
     spectrum[i] = magnitude > 1e-10 ? 20 * Math.log10(magnitude) : -100;
+
+    if (i % 4 === 3) {
+      await new Promise(r => setTimeout(r, 0));
+    }
   }
 
   return { spectrum, binFreqs };
@@ -409,10 +411,11 @@ function drawSpectrum(canvas, layer) {
   ctx.clearRect(0, 0, w, h);
 
   const bars = rawSpectrum.length;
+  const barAreaH = h - 14;  // leave 14px for frequency labels
   const barWidth = (w / bars) - 1;
   if (barWidth < 1) return;
 
-  // dB range: -100 (silent) to 0 (loud) → map to 0..h
+  // dB range: -100 (silent) to 0 (loud) → map to 0..barAreaH
   const minDB = -80;
   const maxDB = -10;
 
@@ -429,15 +432,39 @@ function drawSpectrum(canvas, layer) {
       db += computeEQGain(binFreqs[i], eqType, eqFreq, eqQ, eqGain);
     }
     const fraction = Math.min(1, Math.max(0, (db - minDB) / (maxDB - minDB)));
-    const barH = Math.max(1, fraction * h);
+    const barH = Math.max(1, fraction * barAreaH);
     const x = i * (barWidth + 1);
-    const y = h - barH;
+    const y = barAreaH - barH;
 
     ctx.fillStyle = layer.color;
     ctx.globalAlpha = 0.15 + fraction * 0.85;
     ctx.fillRect(x, y, barWidth, barH);
   }
   ctx.globalAlpha = 1;
+
+  // Frequency labels at reference points
+  if (!binFreqs) return;
+  ctx.fillStyle = '#666';
+  ctx.font = '8px monospace';
+  ctx.textAlign = 'center';
+  const labelY = h - 2;
+
+  // Find bin indices closest to reference frequencies
+  const refs = [20, 100, 1000, 5000, 20000];
+  for (const ref of refs) {
+    // Find the bin whose frequency is closest to the reference
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < binFreqs.length; i++) {
+      const dist = Math.abs(binFreqs[i] - ref);
+      if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+    }
+    const x = bestIdx * (barWidth + 1) + barWidth / 2;
+    // Format: 20, 100, 1k, 5k, 20k
+    const label = ref >= 1000 ? (ref / 1000) + 'k' : String(ref);
+    // Avoid overlapping labels — skip if too close to previous
+    ctx.fillText(label, x, labelY);
+  }
 }
 
 // ── EQ filter transfer function ────────────────────────
