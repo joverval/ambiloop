@@ -109,7 +109,11 @@ async function loadFiles(files) {
       // Compute frequency spectrum asynchronously
       computeSpectrum(audioBuf, 0, audioBuf.duration).then(spec => {
         layer.spectrum = spec;
+        console.debug(`Spectrum ready for layer ${layer.id} (${layer.name}), bins:`, spec?.length);
         renderAll();
+      }).catch(err => {
+        console.warn('Spectrum computation failed for', file.name, err);
+        layer.spectrum = null;
       });
     } catch (err) {
       setStatus(`Failed to load ${file.name}: ${err.message}`);
@@ -128,8 +132,12 @@ function renderAll() {
   requestAnimationFrame(() => {
     state.layers.forEach(l => {
       if (l.spectrum) {
-        const canvas = layerList.querySelector(`canvas[data-spectrum-id="${l.id}"]`);
-        if (canvas) drawSpectrum(canvas, l.spectrum, l.color);
+        const canvas = document.querySelector(`canvas[data-spectrum-id="${l.id}"]`);
+        if (canvas) {
+          drawSpectrum(canvas, l.spectrum, l.color);
+        } else {
+          console.debug(`Spectrum canvas not found for layer ${l.id}`);
+        }
       }
     });
   });
@@ -345,6 +353,9 @@ function formatTime(sec) {
 
 // ── Frequency spectrum visualization ──────────────────
 async function computeSpectrum(buffer, trimStart, trimEnd) {
+  // Yield to event loop so UI stays responsive during DFT
+  await new Promise(r => setTimeout(r, 0));
+
   const sr = buffer.sampleRate;
   const startSample = Math.floor(trimStart * sr);
   const endSample = Math.floor(Math.min(trimEnd, buffer.duration) * sr);
@@ -620,14 +631,17 @@ function splitLayerAt(layer, block, clickEvent) {
   state.layers.splice(idx + 1, 0, rightLayer);
 
   setStatus(`Split at ${cutPoint.toFixed(1)}s → new layer "${rightLayer.name}"`);
-  // Recompute spectrums for both trimmed halves
+  // Recompute spectrums for both trimmed halves — re-render when both done
+  let done = 0;
+  function onSpecDone() { if (++done === 2) renderAll(); }
   computeSpectrum(layer.buffer, layer.trimStart, layer.trimEnd).then(spec => {
     layer.spectrum = spec;
-  });
+    onSpecDone();
+  }).catch(err => { console.warn('Spectrum failed for split left', err); onSpecDone(); });
   computeSpectrum(rightLayer.buffer, rightLayer.trimStart, rightLayer.trimEnd).then(spec => {
     rightLayer.spectrum = spec;
-    renderAll();
-  });
+    onSpecDone();
+  }).catch(err => { console.warn('Spectrum failed for split right', err); onSpecDone(); });
   renderAll();
 }
 
