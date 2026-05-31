@@ -100,20 +100,23 @@ async function loadFiles(files) {
         eqQ: 1.0,
         eqGain: 0,
         pan: 0,             // -1 (left) to 1 (right), 0 = center
-        spectrum: null       // frequency spectrum data (computed async)
+        rawSpectrum: null,  // raw frequency spectrum (dB), before EQ
+        binFreqs: null      // center frequencies (Hz) for each spectrum bin
       };
 
       state.layers.push(layer);
       setStatus(`Loaded: ${file.name}`);
 
       // Compute frequency spectrum asynchronously
-      computeSpectrum(audioBuf, 0, audioBuf.duration).then(spec => {
-        layer.spectrum = spec;
-        console.debug(`Spectrum ready for layer ${layer.id} (${layer.name}), bins:`, spec?.length);
+      computeSpectrum(audioBuf, 0, audioBuf.duration).then(result => {
+        layer.rawSpectrum = result.spectrum;
+        layer.binFreqs = result.binFreqs;
+        console.debug(`Spectrum ready for layer ${layer.id} (${layer.name}), bins:`, result.spectrum.length);
         renderAll();
       }).catch(err => {
         console.warn('Spectrum computation failed for', file.name, err);
-        layer.spectrum = null;
+        layer.rawSpectrum = null;
+        layer.binFreqs = null;
       });
     } catch (err) {
       setStatus(`Failed to load ${file.name}: ${err.message}`);
@@ -131,10 +134,10 @@ function renderAll() {
   // Draw spectrums after DOM settles
   requestAnimationFrame(() => {
     state.layers.forEach(l => {
-      if (l.spectrum) {
+      if (l.rawSpectrum) {
         const canvas = document.querySelector(`canvas[data-spectrum-id="${l.id}"]`);
         if (canvas) {
-          drawSpectrum(canvas, l.spectrum, l.color);
+          drawSpectrum(canvas, l);
         } else {
           console.debug(`Spectrum canvas not found for layer ${l.id}`);
         }
@@ -247,7 +250,7 @@ function renderLayers() {
           </div>
         </div>
       </div>
-      ${l.spectrum ? `<canvas class="spectrum-canvas" data-spectrum-id="${l.id}" width="260" height="32"></canvas>` : ''}
+      ${l.rawSpectrum ? `<canvas class="spectrum-canvas" data-spectrum-id="${l.id}" width="260" height="32"></canvas>` : ''}
     </div>
     `;
   }).join('');
@@ -378,9 +381,11 @@ async function computeSpectrum(buffer, trimStart, trimEnd) {
   const effSr = sr / step;
   const effNyquist = effSr / 2;
   const spectrum = new Float32Array(numBins);
+  const binFreqs = new Float32Array(numBins);
 
   for (let i = 0; i < numBins; i++) {
     const freq = Math.min(20 * Math.pow(nyquist / 20, i / (numBins - 1)), effNyquist * 0.95);
+    binFreqs[i] = freq;
     let real = 0, imag = 0;
     for (let j = 0; j < dlen; j++) {
       const phase = 2 * Math.PI * freq * j / effSr;
@@ -391,17 +396,19 @@ async function computeSpectrum(buffer, trimStart, trimEnd) {
     spectrum[i] = magnitude > 1e-10 ? 20 * Math.log10(magnitude) : -100;
   }
 
-  return spectrum;
+  return { spectrum, binFreqs };
 }
 
-function drawSpectrum(canvas, spectrumData, color) {
-  if (!spectrumData || !canvas) return;
+function drawSpectrum(canvas, layer) {
+  const rawSpectrum = layer.rawSpectrum;
+  const binFreqs = layer.binFreqs;
+  if (!rawSpectrum || !canvas) return;
   const ctx = canvas.getContext('2d');
   const w = canvas.width;
   const h = canvas.height;
   ctx.clearRect(0, 0, w, h);
 
-  const bars = spectrumData.length;
+  const bars = rawSpectrum.length;
   const barWidth = (w / bars) - 1;
   if (barWidth < 1) return;
 
@@ -409,18 +416,141 @@ function drawSpectrum(canvas, spectrumData, color) {
   const minDB = -80;
   const maxDB = -10;
 
+  // Apply EQ transfer function if EQ is enabled
+  const eqEnabled = layer.eqEnabled;
+  const eqType = layer.eqType;
+  const eqFreq = layer.eqFreq;
+  const eqQ = layer.eqQ;
+  const eqGain = layer.eqGain;
+
   for (let i = 0; i < bars; i++) {
-    const db = Math.max(minDB, spectrumData[i]);
-    const fraction = (db - minDB) / (maxDB - minDB);
+    let db = Math.max(minDB, rawSpectrum[i]);
+    if (eqEnabled && binFreqs) {
+      db += computeEQGain(binFreqs[i], eqType, eqFreq, eqQ, eqGain);
+    }
+    const fraction = Math.min(1, Math.max(0, (db - minDB) / (maxDB - minDB)));
     const barH = Math.max(1, fraction * h);
     const x = i * (barWidth + 1);
     const y = h - barH;
 
-    ctx.fillStyle = color;
+    ctx.fillStyle = layer.color;
     ctx.globalAlpha = 0.15 + fraction * 0.85;
     ctx.fillRect(x, y, barWidth, barH);
   }
   ctx.globalAlpha = 1;
+}
+
+// ── EQ filter transfer function ────────────────────────
+// Computes the magnitude response (dB) of a BiquadFilter at a given frequency.
+// Uses RBJ Audio EQ Cookbook formulas matching Web Audio API's BiquadFilterNode.
+function computeEQGain(freq, type, f0, Q, gainDB) {
+  if (freq <= 0 || f0 <= 0) return 0;
+
+  const fs = 44100; // standard sample rate for filter design
+  const w0 = 2 * Math.PI * f0 / fs;
+  const cosW0 = Math.cos(w0);
+  const sinW0 = Math.sin(w0);
+
+  let b0, b1, b2, a0, a1, a2;
+
+  switch (type) {
+    case 'lowpass': {
+      const alpha = sinW0 / (2 * Q);
+      b0 = (1 - cosW0) / 2;
+      b1 = 1 - cosW0;
+      b2 = (1 - cosW0) / 2;
+      a0 = 1 + alpha;
+      a1 = -2 * cosW0;
+      a2 = 1 - alpha;
+      break;
+    }
+    case 'highpass': {
+      const alpha = sinW0 / (2 * Q);
+      b0 = (1 + cosW0) / 2;
+      b1 = -(1 + cosW0);
+      b2 = (1 + cosW0) / 2;
+      a0 = 1 + alpha;
+      a1 = -2 * cosW0;
+      a2 = 1 - alpha;
+      break;
+    }
+    case 'bandpass': {
+      const alpha = sinW0 / (2 * Q);
+      b0 = Q * alpha;
+      b1 = 0;
+      b2 = -Q * alpha;
+      a0 = 1 + alpha;
+      a1 = -2 * cosW0;
+      a2 = 1 - alpha;
+      break;
+    }
+    case 'notch': {
+      const alpha = sinW0 / (2 * Q);
+      b0 = 1;
+      b1 = -2 * cosW0;
+      b2 = 1;
+      a0 = 1 + alpha;
+      a1 = -2 * cosW0;
+      a2 = 1 - alpha;
+      break;
+    }
+    case 'peaking': {
+      const A = Math.pow(10, gainDB / 40);
+      const alpha = sinW0 / (2 * Q);
+      b0 = 1 + alpha * A;
+      b1 = -2 * cosW0;
+      b2 = 1 - alpha * A;
+      a0 = 1 + alpha / A;
+      a1 = -2 * cosW0;
+      a2 = 1 - alpha / A;
+      break;
+    }
+    case 'lowshelf': {
+      const A = Math.pow(10, gainDB / 40);
+      const alpha = sinW0 / 2 * Math.sqrt((A + 1 / A) * (1 - 1) + 2);
+      const sqrtA = Math.sqrt(A);
+      const twoSqrtAAlpha = 2 * sqrtA * alpha;
+      b0 = A * ((A + 1) - (A - 1) * cosW0 + twoSqrtAAlpha);
+      b1 = 2 * A * ((A - 1) - (A + 1) * cosW0);
+      b2 = A * ((A + 1) - (A - 1) * cosW0 - twoSqrtAAlpha);
+      a0 = (A + 1) + (A - 1) * cosW0 + twoSqrtAAlpha;
+      a1 = -2 * ((A - 1) + (A + 1) * cosW0);
+      a2 = (A + 1) + (A - 1) * cosW0 - twoSqrtAAlpha;
+      break;
+    }
+    case 'highshelf': {
+      const A = Math.pow(10, gainDB / 40);
+      const alpha = sinW0 / 2 * Math.sqrt((A + 1 / A) * (1 - 1) + 2);
+      const sqrtA = Math.sqrt(A);
+      const twoSqrtAAlpha = 2 * sqrtA * alpha;
+      b0 = A * ((A + 1) + (A - 1) * cosW0 + twoSqrtAAlpha);
+      b1 = -2 * A * ((A - 1) + (A + 1) * cosW0);
+      b2 = A * ((A + 1) + (A - 1) * cosW0 - twoSqrtAAlpha);
+      a0 = (A + 1) - (A - 1) * cosW0 + twoSqrtAAlpha;
+      a1 = 2 * ((A - 1) - (A + 1) * cosW0);
+      a2 = (A + 1) - (A - 1) * cosW0 - twoSqrtAAlpha;
+      break;
+    }
+    default:
+      return 0;
+  }
+
+  // Evaluate |H(e^jw)| at w = 2*PI*freq/fs
+  const w = 2 * Math.PI * freq / fs;
+  const cosW = Math.cos(w);
+  const sinW = Math.sin(w);
+
+  // H(z) = (b0 + b1*z^-1 + b2*z^-2) / (a0 + a1*z^-1 + a2*z^-2)  where z = e^jw
+  const numReal = b0 + b1 * cosW + b2 * Math.cos(2 * w);
+  const numImag = -(b1 * sinW + b2 * Math.sin(2 * w));
+  const denReal = a0 + a1 * cosW + a2 * Math.cos(2 * w);
+  const denImag = -(a1 * sinW + a2 * Math.sin(2 * w));
+
+  const magNum = Math.sqrt(numReal * numReal + numImag * numImag);
+  const magDen = Math.sqrt(denReal * denReal + denImag * denImag);
+
+  if (magDen < 1e-12) return 0;
+  return 20 * Math.log10(magNum / magDen);
 }
 
 // ── Event delegation for layer controls ────────────────
@@ -620,7 +750,8 @@ function splitLayerAt(layer, block, clickEvent) {
     eqQ: layer.eqQ,
     eqGain: layer.eqGain,
     pan: layer.pan,
-    spectrum: null  // recomputed on render for trimmed region
+    rawSpectrum: null,  // recomputed for trimmed region
+    binFreqs: null
   };
 
   // Current layer gets trimmed at the cut point
@@ -634,12 +765,14 @@ function splitLayerAt(layer, block, clickEvent) {
   // Recompute spectrums for both trimmed halves — re-render when both done
   let done = 0;
   function onSpecDone() { if (++done === 2) renderAll(); }
-  computeSpectrum(layer.buffer, layer.trimStart, layer.trimEnd).then(spec => {
-    layer.spectrum = spec;
+  computeSpectrum(layer.buffer, layer.trimStart, layer.trimEnd).then(result => {
+    layer.rawSpectrum = result.spectrum;
+    layer.binFreqs = result.binFreqs;
     onSpecDone();
   }).catch(err => { console.warn('Spectrum failed for split left', err); onSpecDone(); });
-  computeSpectrum(rightLayer.buffer, rightLayer.trimStart, rightLayer.trimEnd).then(spec => {
-    rightLayer.spectrum = spec;
+  computeSpectrum(rightLayer.buffer, rightLayer.trimStart, rightLayer.trimEnd).then(result => {
+    rightLayer.rawSpectrum = result.spectrum;
+    rightLayer.binFreqs = result.binFreqs;
     onSpecDone();
   }).catch(err => { console.warn('Spectrum failed for split right', err); onSpecDone(); });
   renderAll();
@@ -667,7 +800,8 @@ function duplicateLayer(id) {
     eqQ: layer.eqQ,
     eqGain: layer.eqGain,
     pan: layer.pan,
-    spectrum: layer.spectrum  // same buffer, same trim = same spectrum
+    rawSpectrum: layer.rawSpectrum,  // same buffer, same trim = same spectrum
+    binFreqs: layer.binFreqs
   };
 
   const idx = state.layers.indexOf(layer);
