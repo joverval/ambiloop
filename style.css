@@ -351,8 +351,8 @@ input[type="range"]::-webkit-slider-thumb:hover {
 
 /* Number inputs */
 .num-input {
-  width: 64px;
-  min-width: 52px;
+  width: 52px;
+  min-width: 42px;
   flex-shrink: 0;
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -368,8 +368,13 @@ input[type="range"]::-webkit-slider-thumb:hover {
   border-color: var(--accent-dim);
   background: var(--bg-panel);
 }
-.num-input::-webkit-inner-spin-button {
-  opacity: 0.6;
+.num-input::-webkit-inner-spin-button,
+.num-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.num-input {
+  -moz-appearance: textfield;
 }
 .layer-control .num-input {
   width: 52px;
@@ -384,23 +389,49 @@ input[type="range"]::-webkit-slider-thumb:hover {
 .eq-toggle-row {
   display: flex;
   align-items: center;
+  gap: 8px;
   margin-top: 2px;
 }
-.eq-toggle {
+.eq-enable-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.eq-enable-label input[type="checkbox"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.eq-enable-label:hover { color: var(--text); }
+.eq-expand {
   background: transparent;
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-dim);
-  font-size: 0.7rem;
-  padding: 3px 10px;
+  font-size: 0.65rem;
+  padding: 2px 7px;
   cursor: pointer;
+  line-height: 1;
   transition: color 0.15s, border-color 0.15s;
 }
-.eq-toggle:hover { color: var(--accent); border-color: var(--accent-dim); }
-.eq-toggle.active { color: var(--accent); border-color: var(--accent-dim); }
+.eq-expand:hover { color: var(--accent); border-color: var(--accent-dim); }
+.eq-expand.active { color: var(--accent); border-color: var(--accent-dim); }
 
 .eq-section { margin-top: 6px; }
 .eq-section.hidden { display: none; }
+
+/* Frequency spectrum canvas */
+.spectrum-canvas {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  border-radius: 4px;
+  background: var(--bg-surface);
+  image-rendering: pixelated;
+}
 
 .eq-select {
   flex: 1;

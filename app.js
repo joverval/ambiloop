@@ -99,11 +99,18 @@ async function loadFiles(files) {
         eqFreq: 1000,
         eqQ: 1.0,
         eqGain: 0,
-        pan: 0              // -1 (left) to 1 (right), 0 = center
+        pan: 0,             // -1 (left) to 1 (right), 0 = center
+        spectrum: null       // frequency spectrum data (computed async)
       };
 
       state.layers.push(layer);
       setStatus(`Loaded: ${file.name}`);
+
+      // Compute frequency spectrum asynchronously
+      computeSpectrum(audioBuf, 0, audioBuf.duration).then(spec => {
+        layer.spectrum = spec;
+        renderAll();
+      });
     } catch (err) {
       setStatus(`Failed to load ${file.name}: ${err.message}`);
     }
@@ -117,8 +124,18 @@ function renderAll() {
   renderLayers();
   renderTimeline();
   renderMasterTimeline();
+  // Draw spectrums after DOM settles
+  requestAnimationFrame(() => {
+    state.layers.forEach(l => {
+      if (l.spectrum) {
+        const canvas = layerList.querySelector(`canvas[data-spectrum-id="${l.id}"]`);
+        if (canvas) drawSpectrum(canvas, l.spectrum, l.color);
+      }
+    });
+  });
   updateButtons();
   layerCount.textContent = state.layers.length;
+  if (state.playing) renderMasterPlayhead();
 }
 
 function renderLayers() {
@@ -183,13 +200,15 @@ function renderLayers() {
           </div>
         </div>
 
-        <!-- EQ Section -->
+        <!-- EQ Toggle: enable checkbox + expand arrow -->
         <div class="eq-toggle-row">
-          <button class="eq-toggle ${l.eqEnabled ? 'active' : ''}" data-action="eqToggle" data-id="${l.id}">
-            EQ ${l.eqEnabled ? '▼' : '▶'}
-          </button>
+          <label class="eq-enable-label">
+            <input type="checkbox" data-action="eqEnabled" data-id="${l.id}" ${l.eqEnabled ? 'checked' : ''}>
+            <span>EQ</span>
+          </label>
+          ${l.eqEnabled ? `<button class="eq-expand active" data-action="eqExpand" data-id="${l.id}" title="Show/hide EQ controls">${(l.eqExpanded !== false) ? '▼' : '▶'}</button>` : ''}
         </div>
-        <div class="eq-section ${l.eqEnabled ? '' : 'hidden'}">
+        <div class="eq-section ${l.eqEnabled && (l.eqExpanded !== false) ? '' : 'hidden'}">
           <div class="layer-control">
             <span class="layer-label">Type</span>
             <select data-action="eqType" data-id="${l.id}" class="eq-select">
@@ -221,6 +240,7 @@ function renderLayers() {
           </div>
         </div>
       </div>
+      ${l.spectrum ? `<canvas class="spectrum-canvas" data-spectrum-id="${l.id}" width="260" height="32"></canvas>` : ''}
     </div>
     `;
   }).join('');
@@ -324,6 +344,70 @@ function formatTime(sec) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+// ── Frequency spectrum visualization ──────────────────
+async function computeSpectrum(buffer, trimStart, trimEnd) {
+  const sr = buffer.sampleRate;
+  const startSample = Math.floor(trimStart * sr);
+  const endSample = Math.floor(Math.min(trimEnd, buffer.duration) * sr);
+  const len = endSample - startSample;
+  if (len < 64) return null;
+
+  // Use OfflineAudioContext + AnalyserNode to compute spectrum
+  const offlineCtx = new OfflineAudioContext(1, len, sr);
+  const source = offlineCtx.createBufferSource();
+  source.buffer = buffer;
+  const analyser = offlineCtx.createAnalyser();
+  analyser.fftSize = 256;  // 128 frequency bins
+  analyser.smoothingTimeConstant = 0;
+  source.connect(analyser);
+  analyser.connect(offlineCtx.destination);
+  source.start(0, trimStart, (trimEnd - trimStart));
+  await offlineCtx.startRendering();
+
+  const freqData = new Float32Array(analyser.frequencyBinCount);
+  analyser.getFloatFrequencyData(freqData);
+
+  // Decimate to ~40 log-spaced bins for compact display
+  const numBins = 40;
+  const spectrum = new Float32Array(numBins);
+  const nyquist = sr / 2;
+  for (let i = 0; i < numBins; i++) {
+    const freq = 20 * Math.pow(nyquist / 20, i / (numBins - 1));
+    const idx = Math.round(freq / nyquist * freqData.length);
+    spectrum[i] = Math.max(-100, freqData[Math.min(idx, freqData.length - 1)]);
+  }
+  return spectrum; // dB values, -100..0
+}
+
+function drawSpectrum(canvas, spectrumData, color) {
+  if (!spectrumData || !canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  const bars = spectrumData.length;
+  const barWidth = (w / bars) - 1;
+  if (barWidth < 1) return;
+
+  // dB range: -100 (silent) to 0 (loud) → map to 0..h
+  const minDB = -80;
+  const maxDB = -10;
+
+  for (let i = 0; i < bars; i++) {
+    const db = Math.max(minDB, spectrumData[i]);
+    const fraction = (db - minDB) / (maxDB - minDB);
+    const barH = Math.max(1, fraction * h);
+    const x = i * (barWidth + 1);
+    const y = h - barH;
+
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.15 + fraction * 0.85;
+    ctx.fillRect(x, y, barWidth, barH);
+  }
+  ctx.globalAlpha = 1;
+}
+
 // ── Event delegation for layer controls ────────────────
 // Apply a value to a layer property based on action
 function applyLayerValue(layer, action, value) {
@@ -390,10 +474,20 @@ layerList.addEventListener('click', (e) => {
     if (state.playing) stopPreview();
   } else if (action === 'duplicate') {
     duplicateLayer(id);
-  } else if (action === 'eqToggle') {
+  } else if (action === 'eqEnabled') {
     const layer = state.layers.find(l => l.id === id);
     if (layer) {
-      layer.eqEnabled = !layer.eqEnabled;
+      layer.eqEnabled = e.target.checked;
+      renderAll();
+    }
+  } else if (action === 'eqExpand') {
+    // Just re-render to toggle expand/collapse — handled via a CSS class toggle
+    const layer = state.layers.find(l => l.id === id);
+    if (layer) {
+      // Toggle visibility by storing in a data attribute on the DOM? 
+      // Better: track expanded state in layer, default to expanded when enabled
+      if (!layer.hasOwnProperty('eqExpanded')) layer.eqExpanded = true;
+      layer.eqExpanded = !layer.eqExpanded;
       renderAll();
     }
   }
@@ -510,7 +604,8 @@ function splitLayerAt(layer, block, clickEvent) {
     eqFreq: layer.eqFreq,
     eqQ: layer.eqQ,
     eqGain: layer.eqGain,
-    pan: layer.pan
+    pan: layer.pan,
+    spectrum: null  // recomputed on render for trimmed region
   };
 
   // Current layer gets trimmed at the cut point
@@ -521,6 +616,14 @@ function splitLayerAt(layer, block, clickEvent) {
   state.layers.splice(idx + 1, 0, rightLayer);
 
   setStatus(`Split at ${cutPoint.toFixed(1)}s → new layer "${rightLayer.name}"`);
+  // Recompute spectrums for both trimmed halves
+  computeSpectrum(layer.buffer, layer.trimStart, layer.trimEnd).then(spec => {
+    layer.spectrum = spec;
+  });
+  computeSpectrum(rightLayer.buffer, rightLayer.trimStart, rightLayer.trimEnd).then(spec => {
+    rightLayer.spectrum = spec;
+    renderAll();
+  });
   renderAll();
 }
 
@@ -545,7 +648,8 @@ function duplicateLayer(id) {
     eqFreq: layer.eqFreq,
     eqQ: layer.eqQ,
     eqGain: layer.eqGain,
-    pan: layer.pan
+    pan: layer.pan,
+    spectrum: layer.spectrum  // same buffer, same trim = same spectrum
   };
 
   const idx = state.layers.indexOf(layer);
