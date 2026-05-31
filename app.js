@@ -135,7 +135,6 @@ function renderAll() {
   });
   updateButtons();
   layerCount.textContent = state.layers.length;
-  if (state.playing) renderMasterPlayhead();
 }
 
 function renderLayers() {
@@ -349,34 +348,39 @@ async function computeSpectrum(buffer, trimStart, trimEnd) {
   const sr = buffer.sampleRate;
   const startSample = Math.floor(trimStart * sr);
   const endSample = Math.floor(Math.min(trimEnd, buffer.duration) * sr);
+  const rawData = buffer.getChannelData(0);
   const len = endSample - startSample;
   if (len < 64) return null;
 
-  // Use OfflineAudioContext + AnalyserNode to compute spectrum
-  const offlineCtx = new OfflineAudioContext(1, len, sr);
-  const source = offlineCtx.createBufferSource();
-  source.buffer = buffer;
-  const analyser = offlineCtx.createAnalyser();
-  analyser.fftSize = 256;  // 128 frequency bins
-  analyser.smoothingTimeConstant = 0;
-  source.connect(analyser);
-  analyser.connect(offlineCtx.destination);
-  source.start(0, trimStart, (trimEnd - trimStart));
-  await offlineCtx.startRendering();
-
-  const freqData = new Float32Array(analyser.frequencyBinCount);
-  analyser.getFloatFrequencyData(freqData);
-
-  // Decimate to ~40 log-spaced bins for compact display
-  const numBins = 40;
-  const spectrum = new Float32Array(numBins);
-  const nyquist = sr / 2;
-  for (let i = 0; i < numBins; i++) {
-    const freq = 20 * Math.pow(nyquist / 20, i / (numBins - 1));
-    const idx = Math.round(freq / nyquist * freqData.length);
-    spectrum[i] = Math.max(-100, freqData[Math.min(idx, freqData.length - 1)]);
+  // Downsample to ~2048 samples for fast DFT computation
+  const targetLen = 2048;
+  const step = Math.max(1, Math.floor(len / targetLen));
+  const dlen = Math.floor((len - 1) / step) + 1;
+  const downsampled = new Float32Array(dlen);
+  for (let i = 0, j = startSample; i < dlen; i++, j += step) {
+    downsampled[i] = rawData[Math.min(j, endSample - 1)];
   }
-  return spectrum; // dB values, -100..0
+
+  // Direct DFT at 40 log-spaced frequency bins
+  const numBins = 40;
+  const nyquist = sr / 2;
+  const effSr = sr / step;
+  const effNyquist = effSr / 2;
+  const spectrum = new Float32Array(numBins);
+
+  for (let i = 0; i < numBins; i++) {
+    const freq = Math.min(20 * Math.pow(nyquist / 20, i / (numBins - 1)), effNyquist * 0.95);
+    let real = 0, imag = 0;
+    for (let j = 0; j < dlen; j++) {
+      const phase = 2 * Math.PI * freq * j / effSr;
+      real += downsampled[j] * Math.cos(phase);
+      imag -= downsampled[j] * Math.sin(phase);
+    }
+    const magnitude = Math.sqrt(real * real + imag * imag) / dlen;
+    spectrum[i] = magnitude > 1e-10 ? 20 * Math.log10(magnitude) : -100;
+  }
+
+  return spectrum;
 }
 
 function drawSpectrum(canvas, spectrumData, color) {
