@@ -694,6 +694,18 @@ footer {
   box-shadow: 0 0 4px var(--accent);
 }
 
+.timeline-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  pointer-events: none;
+  display: none;
+  z-index: 5;
+  box-shadow: 0 0 6px var(--accent);
+}
+
 /* Master spectrum (real-time output) */
 .master-spectrum {
   display: none;

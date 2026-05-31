@@ -41,6 +41,7 @@ const masterTimeline = $('#masterTimeline');
 const masterPlayhead = $('#masterPlayhead');
 const masterTime = $('#masterTime');
 const masterSpectrum = $('#masterSpectrum');
+const timelinePlayhead = $('#timelinePlayhead');
 const infoBtn = $('#infoBtn');
 const infoModal = $('#infoModal');
 const infoClose = $('#infoClose');
@@ -1068,6 +1069,7 @@ function stopPreview() {
   playBtn.innerHTML = '&#9654; Play';
   if (state.animFrame) { cancelAnimationFrame(state.animFrame); state.animFrame = null; }
   if (masterPlayhead) masterPlayhead.style.display = 'none';
+  if (timelinePlayhead) timelinePlayhead.style.display = 'none';
   if (masterSpectrum) masterSpectrum.style.display = 'none';
   if (state.masterAnalyser) {
     try { state.masterAnalyser.disconnect(); } catch(e) {}
@@ -1150,6 +1152,7 @@ async function startPreview() {
   // Start playhead animation
   state.previewStartTime = ctx.currentTime;
   if (masterPlayhead) masterPlayhead.style.display = 'block';
+  if (timelinePlayhead) timelinePlayhead.style.display = 'block';
   animatePlayhead();
 }
 
@@ -1162,6 +1165,16 @@ function animatePlayhead() {
   if (masterPlayhead) {
     const pct = Math.min((elapsed / totalDur) * 100, 100);
     masterPlayhead.style.left = pct + '%';
+  }
+  if (timelinePlayhead) {
+    const px = elapsed * state.zoom;
+    timelinePlayhead.style.left = px + 'px';
+    // Auto-scroll to keep playhead visible
+    const scrollLeft = timelineScroll.scrollLeft;
+    const viewW = timelineScroll.clientWidth;
+    if (px < scrollLeft + 40 || px > scrollLeft + viewW - 40) {
+      timelineScroll.scrollLeft = px - viewW / 2;
+    }
   }
   if (masterTime) {
     masterTime.textContent = formatTime(elapsed) + ' / ' + formatTime(totalDur);
@@ -1261,6 +1274,12 @@ function seekTo(frac) {
     masterPlayhead.style.left = (frac * 100) + '%';
     masterPlayhead.style.display = 'block';
   }
+  if (timelinePlayhead) {
+    const px = seekTime * state.zoom;
+    timelinePlayhead.style.left = px + 'px';
+    timelinePlayhead.style.display = 'block';
+    timelineScroll.scrollLeft = px - timelineScroll.clientWidth / 2;
+  }
   if (masterTime) {
     masterTime.textContent = formatTime(seekTime) + ' / ' + formatTime(totalDur);
   }
@@ -1353,6 +1372,7 @@ async function startPreviewFrom(seekTime) {
 
   state.previewStartTime = ctx.currentTime - seekTime; // so elapsed = ctx.currentTime - previewStartTime = seekTime
   if (masterPlayhead) masterPlayhead.style.display = 'block';
+  if (timelinePlayhead) timelinePlayhead.style.display = 'block';
   animatePlayhead();
 }
 
