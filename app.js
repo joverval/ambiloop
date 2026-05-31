@@ -703,6 +703,12 @@ function applyLayerValue(layer, action, value) {
     layer.eqGain = parseFloat(value);
   } else if (action === 'eqType') {
     layer.eqType = value;
+  } else if (action === 'fadeIn') {
+    const val = parseFloat(value);
+    if (!isNaN(val) && val >= 0) layer.fadeIn = Math.round(val * 10) / 10;
+  } else if (action === 'fadeOut') {
+    const val = parseFloat(value);
+    if (!isNaN(val) && val >= 0) layer.fadeOut = Math.round(val * 10) / 10;
   }
 }
 
