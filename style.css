@@ -71,6 +71,7 @@ body.drag-over {
 main {
   display: grid;
   grid-template-columns: 340px 1fr;
+  grid-template-rows: 1fr;
   gap: 0;
   flex: 1;
   overflow: hidden;
