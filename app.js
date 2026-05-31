@@ -2,19 +2,22 @@
 // Pure client-side: Web Audio API + OLA pitch shifting + WAV export
 // Added: per-layer trim, offset, timeline blocks with drag, crossfade looping
 
-const LAYER_COLORS = ['#e94560','#0f3460','#533483','#2ecc71','#f39c12','#3498db','#e74c3c','#1abc9c'];
+const LAYER_COLORS = ['#c0392b','#2980b9','#8e44ad','#27ae60','#e67e22','#2c3e50','#d35400','#16a085'];
 
 const state = {
-  layers: [],           // { id, name, buffer, gain, pitchSemitones, color, muted, trimStart, trimEnd, offset }
+  layers: [],           // { id, name, buffer, gain, pitchSemitones, color, muted, solo, trimStart, trimEnd, offset, fadeIn, fadeOut }
   audioCtx: null,       // AudioContext for preview
   playing: false,
   nextId: 1,
   loopCrossfade: 2.0,   // seconds, 0 = disabled
   dragging: null,        // { id, startX, startOffset }
   splitMode: false,      // split tool active
-  zoom: 40,             // pixels per second — timeline scale
+  zoom: 40,             // pixels per second -- timeline scale
   previewStartTime: 0,  // AudioContext.currentTime when preview started (for playhead)
-  animFrame: null       // requestAnimationFrame ID for playhead
+  animFrame: null,       // requestAnimationFrame ID for playhead
+  selectedId: null,      // selected layer ID for keyboard shortcuts
+  undoStack: [],         // [{layers, loopCrossfade}, ...]
+  redoStack: []
 };
 
 // ── DOM refs ──────────────────────────────────────────
@@ -38,6 +41,9 @@ const masterTimeline = $('#masterTimeline');
 const masterPlayhead = $('#masterPlayhead');
 const masterTime = $('#masterTime');
 const masterSpectrum = $('#masterSpectrum');
+const infoBtn = $('#infoBtn');
+const infoModal = $('#infoModal');
+const infoClose = $('#infoClose');
 
 // ── State helpers ──────────────────────────────────────
 function setStatus(msg) { statusBar.textContent = msg; }
@@ -46,6 +52,49 @@ function updateButtons() {
   playBtn.disabled = !hasLayers;
   stopBtn.disabled = !hasLayers;
   exportBtn.disabled = !hasLayers;
+  if (exportMp3Btn) exportMp3Btn.disabled = !hasLayers;
+}
+
+function pushUndo() {
+  const snapshot = {
+    layers: state.layers.map(l => ({...l, buffer: l.buffer})),
+    loopCrossfade: state.loopCrossfade
+  };
+  state.undoStack.push(snapshot);
+  if (state.undoStack.length > 50) state.undoStack.shift();
+  state.redoStack = [];
+}
+
+function undo() {
+  if (state.undoStack.length === 0) return;
+  const current = {
+    layers: state.layers.map(l => ({...l, buffer: l.buffer})),
+    loopCrossfade: state.loopCrossfade
+  };
+  state.redoStack.push(current);
+  const prev = state.undoStack.pop();
+  state.layers = prev.layers;
+  state.loopCrossfade = prev.loopCrossfade;
+  if (state.playing) stopPreview();
+  state.selectedId = null;
+  renderAll();
+  setStatus('Undo');
+}
+
+function redo() {
+  if (state.redoStack.length === 0) return;
+  const current = {
+    layers: state.layers.map(l => ({...l, buffer: l.buffer})),
+    loopCrossfade: state.loopCrossfade
+  };
+  state.undoStack.push(current);
+  const next = state.redoStack.pop();
+  state.layers = next.layers;
+  state.loopCrossfade = next.loopCrossfade;
+  if (state.playing) stopPreview();
+  state.selectedId = null;
+  renderAll();
+  setStatus('Redo');
 }
 
 function getTrimmedDuration(layer) {
@@ -93,9 +142,12 @@ async function loadFiles(files) {
         pitchSemitones: 0,
         color: LAYER_COLORS[(state.layers.length) % LAYER_COLORS.length],
         muted: false,
+        solo: false,
         trimStart: 0,
         trimEnd: audioBuf.duration,
         offset: 0,
+        fadeIn: 0,
+        fadeOut: 0,
         eqEnabled: false,
         eqType: 'peaking',
         eqFreq: 1000,
@@ -158,10 +210,15 @@ function renderLayers() {
 
   layerList.innerHTML = state.layers.map(l => {
     const dur = l.buffer.duration;
+    const isSelected = l.id === state.selectedId;
     return `
-    <div class="layer-card" data-id="${l.id}">
+    <div class="layer-card ${isSelected ? 'selected' : ''}" data-id="${l.id}">
       <div class="layer-header">
         <span class="layer-color" style="background:${l.color}"></span>
+        <div class="layer-mute-solo">
+          <button class="layer-mute-btn ${l.muted ? 'active' : ''}" data-action="mute" data-id="${l.id}" title="Mute">M</button>
+          <button class="layer-solo-btn ${l.solo ? 'active' : ''}" data-action="solo" data-id="${l.id}" title="Solo">S</button>
+        </div>
         <span class="layer-name" title="${l.name}">${l.name}</span>
         <span class="layer-dur">${formatTime(dur)}</span>
         <button class="layer-duplicate" data-action="duplicate" data-id="${l.id}" title="Duplicate">&#9112;</button>
@@ -213,6 +270,19 @@ function renderLayers() {
                    data-action="trimEnd" data-id="${l.id}" class="num-input">
             <span class="layer-value">s</span>
           </div>
+        </div>
+
+        <!-- Fade controls -->
+        <div class="layer-control">
+          <span class="layer-label">Fade</span>
+          <span class="layer-value" style="font-size:0.65rem">in</span>
+          <input type="number" value="${l.fadeIn.toFixed(1)}" step="0.1" min="0" max="10"
+                 data-action="fadeIn" data-id="${l.id}" class="num-input" style="width:44px">
+          <span class="layer-value">s</span>
+          <span class="layer-value" style="font-size:0.65rem">out</span>
+          <input type="number" value="${l.fadeOut.toFixed(1)}" step="0.1" min="0" max="10"
+                 data-action="fadeOut" data-id="${l.id}" class="num-input" style="width:44px">
+          <span class="layer-value">s</span>
         </div>
 
         <!-- EQ Toggle: enable checkbox + expand arrow -->
@@ -672,6 +742,16 @@ layerList.addEventListener('input', (e) => {
 // Number inputs + selects: update on 'change' (blur/Enter — keeps focus during typing)
 layerList.addEventListener('change', (e) => {
   const action = e.target.dataset.action;
+
+  // Click on layer card itself (not a button) to select/deselect
+  if (!action && e.target.closest('.layer-card')) {
+    const card = e.target.closest('.layer-card');
+    const id = parseInt(card.dataset.id);
+    state.selectedId = (state.selectedId === id) ? null : id;
+    renderAll();
+    return;
+  }
+
   if (!action) return;
   const tag = e.target.tagName;
   const type = e.target.type;
@@ -684,6 +764,7 @@ layerList.addEventListener('change', (e) => {
   if (!layer) return;
 
   applyLayerValue(layer, action, e.target.value);
+  pushUndo();
   renderAll();
 });
 
@@ -692,7 +773,9 @@ layerList.addEventListener('click', (e) => {
   const id = parseInt(e.target.dataset.id);
 
   if (action === 'remove') {
+    pushUndo();
     state.layers = state.layers.filter(l => l.id !== id);
+    state.selectedId = (state.selectedId === id) ? null : state.selectedId;
     renderAll();
     if (state.playing) stopPreview();
   } else if (action === 'duplicate') {
@@ -707,6 +790,53 @@ layerList.addEventListener('click', (e) => {
         if (node) {
           node.gain.gain.value = e.target.checked ? layer.gain : 0;
         }
+      }
+    }
+  } else if (action === 'mute') {
+    const layer = state.layers.find(l => l.id === id);
+    if (layer) {
+      pushUndo();
+      layer.muted = !layer.muted;
+      // If muted and was soloed, clear solo
+      if (layer.muted) layer.solo = false;
+      if (state.playing) stopPreview();
+      renderAll();
+    }
+  } else if (action === 'solo') {
+    const layer = state.layers.find(l => l.id === id);
+    if (layer) {
+      pushUndo();
+      const hasAnySolo = state.layers.some(l => l.solo);
+      if (hasAnySolo && !layer.solo) {
+        // Adding a new solo: only this layer
+        state.layers.forEach(l => l.solo = (l.id === id));
+      } else {
+        // Toggle this layer's solo
+        layer.solo = !layer.solo;
+        // If no layers left soloed, exit solo mode
+        if (!state.layers.some(l => l.solo)) {
+          // All clear
+        }
+      }
+      if (state.playing) stopPreview();
+      renderAll();
+    }
+  } else if (action === 'fadeIn') {
+    const layer = state.layers.find(l => l.id === id);
+    if (layer) {
+      const val = parseFloat(e.target.value);
+      if (!isNaN(val) && val >= 0) {
+        pushUndo();
+        layer.fadeIn = Math.round(val * 10) / 10;
+      }
+    }
+  } else if (action === 'fadeOut') {
+    const layer = state.layers.find(l => l.id === id);
+    if (layer) {
+      const val = parseFloat(e.target.value);
+      if (!isNaN(val) && val >= 0) {
+        pushUndo();
+        layer.fadeOut = Math.round(val * 10) / 10;
       }
     }
   } else if (action === 'eqEnabled') {
@@ -831,9 +961,12 @@ function splitLayerAt(layer, block, clickEvent) {
     pitchSemitones: layer.pitchSemitones,
     color: LAYER_COLORS[(state.layers.length) % LAYER_COLORS.length],
     muted: false,
+    solo: false,
     trimStart: cutPoint,
     trimEnd: layer.trimEnd,
     offset: layer.offset + (cutPoint - layer.trimStart),
+    fadeIn: 0,
+    fadeOut: 0,
     eqEnabled: layer.eqEnabled,
     eqType: layer.eqType,
     eqFreq: layer.eqFreq,
@@ -881,9 +1014,12 @@ function duplicateLayer(id) {
     pitchSemitones: layer.pitchSemitones,
     color: LAYER_COLORS[(state.layers.length) % LAYER_COLORS.length],
     muted: layer.muted,
+    solo: false,
     trimStart: layer.trimStart,
     trimEnd: layer.trimEnd,
     offset: layer.offset,
+    fadeIn: layer.fadeIn,
+    fadeOut: layer.fadeOut,
     eqEnabled: layer.eqEnabled,
     eqType: layer.eqType,
     eqFreq: layer.eqFreq,
@@ -959,9 +1095,11 @@ async function startPreview() {
   if (masterSpectrum) masterSpectrum.style.display = 'block';
 
   const now = ctx.currentTime;
+  const hasAnySolo = state.layers.some(l => l.solo);
 
   for (const layer of state.layers) {
     if (layer.muted) continue;
+    if (hasAnySolo && !layer.solo) continue;
 
     const source = ctx.createBufferSource();
     source.buffer = layer.buffer;
@@ -1046,8 +1184,8 @@ function drawMasterSpectrum(canvas, analyser) {
 
   ctx.clearRect(0, 0, w, h);
 
-  // Dark background
-  ctx.fillStyle = '#0f3460';
+  // Surface background
+  ctx.fillStyle = '#b8b8bd';
   ctx.fillRect(0, 0, w, h);
 
   const barWidth = Math.max(1, w / bufferLength);
@@ -1055,11 +1193,11 @@ function drawMasterSpectrum(canvas, analyser) {
     const value = dataArray[i] / 255; // 0-1
     const barHeight = Math.max(1, value * barH);
 
-    // Gradient from accent to dim
+    // Gradient from accent red to muted gray
     const t = i / bufferLength;
-    const r = Math.round(233 + (83 - 233) * t);
-    const g = Math.round(69 + (52 - 69) * t);
-    const b = Math.round(96 + (131 - 96) * t);
+    const r = Math.round(192 + (130 - 192) * t);
+    const g = Math.round(57 + (130 - 57) * t);
+    const b = Math.round(43 + (130 - 43) * t);
     ctx.fillStyle = `rgb(${r},${g},${b})`;
 
     ctx.fillRect(Math.floor(i * barWidth), barH - barHeight, Math.ceil(barWidth), barHeight);
@@ -1070,7 +1208,7 @@ function drawMasterSpectrum(canvas, analyser) {
   const nyquist = sampleRate / 2;
   const refs = [20, 100, 1000, 5000, 20000];
 
-  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.fillStyle = 'rgba(90,90,90,0.6)';
   ctx.font = '9px sans-serif';
   ctx.textAlign = 'center';
 
@@ -1147,9 +1285,11 @@ async function startPreviewFrom(seekTime) {
   if (masterSpectrum) masterSpectrum.style.display = 'block';
 
   const now = ctx.currentTime;
+  const hasAnySolo = state.layers.some(l => l.solo);
 
   for (const layer of state.layers) {
     if (layer.muted) continue;
+    if (hasAnySolo && !layer.solo) continue;
 
     const trimmedDur = getTrimmedDuration(layer);
     const layerEnd = layer.offset + trimmedDur;
@@ -1354,6 +1494,119 @@ function encodeWAV(audioBuffer) {
   return new Blob([buffer], { type: 'audio/wav' });
 }
 
+// ── MP3 Export ────────────────────────────────────────
+async function exportMP3() {
+  if (state.layers.length === 0) return;
+  if (typeof lamejs === 'undefined') {
+    setStatus('MP3 export requires lame.min.js');
+    return;
+  }
+
+  setStatus('Rendering MP3...');
+  exportMp3Btn.disabled = true;
+
+  try {
+    const sr = state.layers[0].buffer.sampleRate;
+    const totalDur = getTotalDuration();
+    const totalSamples = Math.ceil(totalDur * sr);
+    const hasAnySolo = state.layers.some(l => l.solo);
+
+    const mixBufferL = new Float32Array(totalSamples);
+    const mixBufferR = new Float32Array(totalSamples);
+
+    for (const layer of state.layers) {
+      if (layer.muted) continue;
+      if (hasAnySolo && !layer.solo) continue;
+      setStatus(`Processing: ${layer.name}...`);
+
+      const trimStartSample = Math.floor(layer.trimStart * sr);
+      const trimEndSample = Math.floor(Math.min(layer.trimEnd, layer.buffer.duration) * sr);
+      const trimmedLen = trimEndSample - trimStartSample;
+      if (trimmedLen < 1) continue;
+
+      const trimCtx = new OfflineAudioContext(1, trimmedLen, sr);
+      const trimBuf = trimCtx.createBuffer(1, trimmedLen, sr);
+      trimBuf.copyToChannel(layer.buffer.getChannelData(0).subarray(trimStartSample, trimEndSample), 0, 0);
+
+      const shifted = await pitchShiftBuffer(trimBuf, layer.pitchSemitones);
+      let eqBuffer = shifted;
+      if (layer.eqEnabled) {
+        const eqCtx = new OfflineAudioContext(shifted.numberOfChannels, shifted.length, sr);
+        const eqSource = eqCtx.createBufferSource();
+        eqSource.buffer = shifted;
+        const eqFilter = eqCtx.createBiquadFilter();
+        eqFilter.type = layer.eqType;
+        eqFilter.frequency.value = layer.eqFreq;
+        eqFilter.Q.value = layer.eqQ;
+        if (['peaking','lowshelf','highshelf'].includes(layer.eqType)) eqFilter.gain.value = layer.eqGain;
+        eqSource.connect(eqFilter);
+        eqFilter.connect(eqCtx.destination);
+        eqSource.start(0);
+        eqBuffer = await eqCtx.startRendering();
+      }
+
+      const shiftedData = eqBuffer.getChannelData(0);
+      const pan = layer.pan || 0;
+      const panAngle = (pan + 1) * Math.PI / 4;
+      const gain = layer.gain;
+      const leftGain = Math.cos(panAngle) * gain;
+      const rightGain = Math.sin(panAngle) * gain;
+
+      const offsetSample = Math.floor(layer.offset * sr);
+      const endSample = Math.min(offsetSample + shiftedData.length, totalSamples);
+      const fadeInSamples = Math.floor(layer.fadeIn * sr);
+      const fadeOutSamples = Math.floor(layer.fadeOut * sr);
+      for (let i = offsetSample; i < endSample; i++) {
+        let sample = shiftedData[i - offsetSample];
+        const localI = i - offsetSample;
+        if (localI < fadeInSamples && fadeInSamples > 0) sample *= localI / fadeInSamples;
+        const fromEnd = (endSample - i - 1);
+        if (fromEnd < fadeOutSamples && fadeOutSamples > 0) sample *= fromEnd / fadeOutSamples;
+        mixBufferL[i] += sample * leftGain;
+        mixBufferR[i] += sample * rightGain;
+      }
+    }
+
+    setStatus('Encoding MP3...');
+    const mp3encoder = new lamejs.Mp3Encoder(2, sr, 192);
+    const blockSize = 1152;
+    const mp3Data = [];
+
+    const peak = Math.max(
+      mixBufferL.reduce((m, v) => Math.max(m, Math.abs(v)), 0),
+      mixBufferR.reduce((m, v) => Math.max(m, Math.abs(v)), 0)
+    );
+    const norm = peak > 1.0 ? 0.95 / peak : 1.0;
+
+    for (let i = 0; i < totalSamples; i += blockSize) {
+      const left = new Int16Array(blockSize);
+      const right = new Int16Array(blockSize);
+      for (let j = 0; j < blockSize && (i + j) < totalSamples; j++) {
+        left[j] = Math.max(-32768, Math.min(32767, mixBufferL[i + j] * norm * 32767));
+        right[j] = Math.max(-32768, Math.min(32767, mixBufferR[i + j] * norm * 32767));
+      }
+      const frame = mp3encoder.encodeBuffer(left, right);
+      if (frame.length > 0) mp3Data.push(frame);
+    }
+    const final = mp3encoder.flush();
+    if (final.length > 0) mp3Data.push(final);
+
+    const blob = new Blob(mp3Data, { type: 'audio/mp3' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'ambiloop.mp3';
+    a.click();
+    URL.revokeObjectURL(url);
+    setStatus('MP3 exported (192kbps stereo)');
+  } catch (err) {
+    console.error(err);
+    setStatus('MP3 export failed: ' + err.message);
+  } finally {
+    exportMp3Btn.disabled = false;
+  }
+}
+
 function writeString(view, offset, str) {
   for (let i = 0; i < str.length; i++) {
     view.setUint8(offset + i, str.charCodeAt(i));
@@ -1376,9 +1629,11 @@ async function exportWAV() {
     // Stereo mix buffers
     const mixBufferL = new Float32Array(totalSamples);
     const mixBufferR = new Float32Array(totalSamples);
+    const hasAnySolo = state.layers.some(l => l.solo);
 
     for (const layer of state.layers) {
       if (layer.muted) continue;
+      if (hasAnySolo && !layer.solo) continue;
 
       setStatus(`Processing: ${layer.name}...`);
 
@@ -1430,8 +1685,20 @@ async function exportWAV() {
       // Place at offset — mix into stereo buffers
       const offsetSample = Math.floor(layer.offset * sr);
       const endSample = Math.min(offsetSample + shiftedData.length, totalSamples);
+      const fadeInSamples = Math.floor(layer.fadeIn * sr);
+      const fadeOutSamples = Math.floor(layer.fadeOut * sr);
       for (let i = offsetSample; i < endSample; i++) {
-        const sample = shiftedData[i - offsetSample];
+        let sample = shiftedData[i - offsetSample];
+        // Fade-in envelope
+        const localI = i - offsetSample;
+        if (localI < fadeInSamples && fadeInSamples > 0) {
+          sample *= localI / fadeInSamples;
+        }
+        // Fade-out envelope
+        const fromEnd = (endSample - i - 1);
+        if (fromEnd < fadeOutSamples && fadeOutSamples > 0) {
+          sample *= fromEnd / fadeOutSamples;
+        }
         mixBufferL[i] += sample * leftGain;
         mixBufferR[i] += sample * rightGain;
       }
@@ -1502,8 +1769,67 @@ exportBtn.addEventListener('click', exportWAV);
 
 // ── Keyboard shortcuts ─────────────────────────────────
 document.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT') return;
-  if (e.code === 'Space') { e.preventDefault(); if (state.playing) stopPreview(); else startPreview(); }
+  // Don't capture shortcuts when user is typing in an input
+  const tag = e.target.tagName;
+  const isInput = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || e.target.isContentEditable;
+  if (isInput) return;
+
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (state.layers.length > 0) { state.playing ? stopPreview() : startPreview(); }
+  }
+
+  if (e.code === 'Delete' || e.code === 'Backspace') {
+    if (state.selectedId !== null) {
+      e.preventDefault();
+      const layer = state.layers.find(l => l.id === state.selectedId);
+      if (layer) {
+        pushUndo();
+        state.layers = state.layers.filter(l => l.id !== state.selectedId);
+        state.selectedId = null;
+        if (state.playing) stopPreview();
+        renderAll();
+      }
+    }
+  }
+
+  if (e.code === 'KeyM' && state.selectedId !== null) {
+    e.preventDefault();
+    const layer = state.layers.find(l => l.id === state.selectedId);
+    if (layer) {
+      pushUndo();
+      layer.muted = !layer.muted;
+      if (layer.muted) layer.solo = false;
+      if (state.playing) stopPreview();
+      renderAll();
+    }
+  }
+
+  if (e.code === 'KeyS' && state.selectedId !== null) {
+    e.preventDefault();
+    const layer = state.layers.find(l => l.id === state.selectedId);
+    if (layer) {
+      pushUndo();
+      const hasAnySolo = state.layers.some(l => l.solo);
+      if (hasAnySolo && !layer.solo) {
+        state.layers.forEach(l => l.solo = (l.id === state.selectedId));
+      } else {
+        layer.solo = !layer.solo;
+      }
+      if (state.playing) stopPreview();
+      renderAll();
+    }
+  }
+
+  if (e.code === 'Escape') {
+    state.selectedId = null;
+    renderAll();
+  }
+
+  if (e.code === 'KeyZ' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    e.shiftKey ? redo() : undo();
+  }
 });
 
 // ── Crossfade controls ─────────────────────────────────
@@ -1541,6 +1867,20 @@ if (masterTimeline) {
     const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     seekTo(frac);
   });
+}
+
+// ── Info modal ────────────────────────────────────────
+if (infoBtn && infoModal && infoClose) {
+  infoBtn.addEventListener('click', () => infoModal.style.display = 'flex');
+  infoClose.addEventListener('click', () => infoModal.style.display = 'none');
+  infoModal.addEventListener('click', (e) => {
+    if (e.target === infoModal) infoModal.style.display = 'none';
+  });
+}
+
+// ── MP3 export ────────────────────────────────────────
+if (exportMp3Btn) {
+  exportMp3Btn.addEventListener('click', exportMP3);
 }
 
 // ── Init ────────────────────────────────────────────────

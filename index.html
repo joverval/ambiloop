@@ -12,9 +12,11 @@
 <header class="top-bar">
   <span class="logo"><img src="favicon.svg" class="logo-icon" alt="" width="22" height="22"> ambiloop</span>
   <span class="subtitle">ambient audio layer composer</span>
+  <button class="info-btn" id="infoBtn" title="Keyboard shortcuts">&#8505;</button>
   <button id="fileBtn" class="btn-top">+ Add Files</button>
   <input type="file" id="fileInput" multiple accept="audio/*" hidden>
   <button id="exportBtn" class="btn-top" disabled>Export WAV</button>
+  <button id="exportMp3Btn" class="btn-top" disabled>Export MP3</button>
 </header>
 
 <main>
@@ -75,6 +77,25 @@
   </footer>
 </div>
 
+<!-- Info Modal -->
+<div id="infoModal" class="info-modal" style="display:none">
+  <div class="info-modal-content">
+    <h3>Keyboard Shortcuts</h3>
+    <table class="shortcuts-table">
+      <tr><td><kbd>Space</kbd></td><td>Play / Pause</td></tr>
+      <tr><td><kbd>Delete</kbd></td><td>Remove selected layer</td></tr>
+      <tr><td><kbd>M</kbd></td><td>Mute / Unmute selected layer</td></tr>
+      <tr><td><kbd>S</kbd></td><td>Solo / Unsolo selected layer</td></tr>
+      <tr><td><kbd>Escape</kbd></td><td>Deselect layer</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Undo</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></td><td>Redo</td></tr>
+    </table>
+    <p class="info-tip">Click a layer card to select it before using shortcuts.</p>
+    <button id="infoClose" class="btn-close">Close</button>
+  </div>
+</div>
+
+<script src="lame.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
