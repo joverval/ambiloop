@@ -1021,6 +1021,8 @@ function drawMasterSpectrum(canvas, analyser) {
   const ctx = canvas.getContext('2d');
   const w = canvas.width;
   const h = canvas.height;
+  const labelH = 14;  // bottom margin for labels
+  const barH = h - labelH;
 
   const bufferLength = analyser.frequencyBinCount;
   const dataArray = new Uint8Array(bufferLength);
@@ -1035,7 +1037,7 @@ function drawMasterSpectrum(canvas, analyser) {
   const barWidth = Math.max(1, w / bufferLength);
   for (let i = 0; i < bufferLength; i++) {
     const value = dataArray[i] / 255; // 0-1
-    const barHeight = Math.max(1, value * h);
+    const barHeight = Math.max(1, value * barH);
 
     // Gradient from accent to dim
     const t = i / bufferLength;
@@ -1044,7 +1046,23 @@ function drawMasterSpectrum(canvas, analyser) {
     const b = Math.round(96 + (131 - 96) * t);
     ctx.fillStyle = `rgb(${r},${g},${b})`;
 
-    ctx.fillRect(Math.floor(i * barWidth), h - barHeight, Math.ceil(barWidth), barHeight);
+    ctx.fillRect(Math.floor(i * barWidth), barH - barHeight, Math.ceil(barWidth), barHeight);
+  }
+
+  // Frequency labels
+  const sampleRate = analyser.context.sampleRate;
+  const nyquist = sampleRate / 2;
+  const refs = [20, 100, 1000, 5000, 20000];
+
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'center';
+
+  for (const ref of refs) {
+    const px = (ref / nyquist) * w;
+    if (px < 4 || px > w - 4) continue;  // skip if too close to edge
+    const label = ref >= 1000 ? (ref / 1000) + 'k' : String(ref);
+    ctx.fillText(label, px, h - 3);
   }
 }
 

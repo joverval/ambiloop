@@ -653,7 +653,7 @@ footer {
 .master-spectrum {
   display: none;
   width: 100%;
-  height: 40px;
+  height: 52px;
   margin-top: 4px;
   border-radius: 4px;
   background: var(--bg-surface);
