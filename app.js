@@ -365,8 +365,11 @@ layerList.addEventListener('click', (e) => {
   } else if (action === 'duplicate') {
     duplicateLayer(id);
   } else if (action === 'eqToggle') {
-    layer.eqEnabled = !layer.eqEnabled;
-    renderAll();
+    const layer = state.layers.find(l => l.id === id);
+    if (layer) {
+      layer.eqEnabled = !layer.eqEnabled;
+      renderAll();
+    }
   }
 });
 
