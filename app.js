@@ -749,15 +749,6 @@ layerList.addEventListener('input', (e) => {
 layerList.addEventListener('change', (e) => {
   const action = e.target.dataset.action;
 
-  // Click on layer card itself (not a button) to select/deselect
-  if (!action && e.target.closest('.layer-card')) {
-    const card = e.target.closest('.layer-card');
-    const id = parseInt(card.dataset.id);
-    state.selectedId = (state.selectedId === id) ? null : id;
-    renderAll();
-    return;
-  }
-
   if (!action) return;
   const tag = e.target.tagName;
   const type = e.target.type;
@@ -859,6 +850,14 @@ layerList.addEventListener('click', (e) => {
       // Better: track expanded state in layer, default to expanded when enabled
       if (!layer.hasOwnProperty('eqExpanded')) layer.eqExpanded = true;
       layer.eqExpanded = !layer.eqExpanded;
+      renderAll();
+    }
+  } else {
+    // Click on layer card (non-button area) → select/deselect
+    const card = e.target.closest('.layer-card');
+    if (card) {
+      const cardId = parseInt(card.dataset.id);
+      state.selectedId = (state.selectedId === cardId) ? null : cardId;
       renderAll();
     }
   }
