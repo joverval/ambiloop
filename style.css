@@ -644,3 +644,14 @@ footer {
   z-index: 2;
   box-shadow: 0 0 6px rgba(233,69,96,0.5);
 }
+
+/* Master spectrum (real-time output) */
+.master-spectrum {
+  display: none;
+  width: 100%;
+  height: 40px;
+  margin-top: 4px;
+  border-radius: 4px;
+  background: var(--bg-surface);
+  image-rendering: pixelated;
+}

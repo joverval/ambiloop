@@ -37,6 +37,7 @@ const zoomSlider = $('#zoomSlider');
 const masterTimeline = $('#masterTimeline');
 const masterPlayhead = $('#masterPlayhead');
 const masterTime = $('#masterTime');
+const masterSpectrum = $('#masterSpectrum');
 
 // ── State helpers ──────────────────────────────────────
 function setStatus(msg) { statusBar.textContent = msg; }
@@ -638,6 +639,29 @@ layerList.addEventListener('input', (e) => {
   const layer = state.layers.find(l => l.id === id);
   if (!layer) return;
   applyLayerValue(layer, e.target.dataset.action, e.target.value);
+
+  // Live-update running audio nodes during playback
+  if (state.playing) {
+    const node = previewNodes.find(n => n.layerId === id);
+    if (node) {
+      const action = e.target.dataset.action;
+      const val = e.target.value;
+      if (action === 'pitch') {
+        node.source.playbackRate.value = Math.pow(2, parseFloat(val) / 12);
+      } else if (action === 'gain') {
+        node.gain.gain.value = val / 100;
+      } else if (action === 'pan') {
+        node.panner.pan.value = parseInt(val) / 100;
+      } else if (action === 'eqFreq' && node.eq) {
+        node.eq.frequency.value = parseInt(val);
+      } else if (action === 'eqQ' && node.eq) {
+        node.eq.Q.value = parseFloat(val);
+      } else if (action === 'eqGain' && node.eq) {
+        node.eq.gain.value = parseFloat(val);
+      }
+    }
+  }
+
   renderAll();
 });
 
@@ -887,6 +911,15 @@ function stopPreview() {
   playBtn.innerHTML = '&#9654; Play';
   if (state.animFrame) { cancelAnimationFrame(state.animFrame); state.animFrame = null; }
   if (masterPlayhead) masterPlayhead.style.display = 'none';
+  if (masterSpectrum) masterSpectrum.style.display = 'none';
+  if (state.masterAnalyser) {
+    try { state.masterAnalyser.disconnect(); } catch(e) {}
+    state.masterAnalyser = null;
+  }
+  if (state.masterGain) {
+    try { state.masterGain.disconnect(); } catch(e) {}
+    state.masterGain = null;
+  }
 }
 
 async function startPreview() {
@@ -898,7 +931,16 @@ async function startPreview() {
 
   const masterGain = ctx.createGain();
   masterGain.gain.value = 0.7;
-  masterGain.connect(ctx.destination);
+  state.masterGain = masterGain;
+
+  // Master analyser for real-time spectrum
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  analyser.smoothingTimeConstant = 0.7;
+  analyser.connect(ctx.destination);
+  masterGain.connect(analyser);
+  state.masterAnalyser = analyser;
+  if (masterSpectrum) masterSpectrum.style.display = 'block';
 
   const now = ctx.currentTime;
 
@@ -935,10 +977,10 @@ async function startPreview() {
     panner.pan.value = layer.pan || 0;
     gainNode.connect(panner);
     panner.connect(masterGain);
-
     source.start(now + layer.offset, 0);
 
-    previewNodes.push({ source, gain: gainNode, eq: eqFilter, panner });
+    previewNodes.push({ source, gain: gainNode, eq: eqFilter, panner, layerId: layer.id });
+
   }
 
   state.playing = true;
@@ -966,7 +1008,44 @@ function animatePlayhead() {
     masterTime.textContent = formatTime(elapsed) + ' / ' + formatTime(totalDur);
   }
 
+  // Draw master output spectrum
+  if (masterSpectrum && state.masterAnalyser && masterSpectrum.style.display !== 'none') {
+    drawMasterSpectrum(masterSpectrum, state.masterAnalyser);
+  }
+
   state.animFrame = requestAnimationFrame(animatePlayhead);
+}
+
+// ── Master output spectrum (real-time AnalyserNode) ─────
+function drawMasterSpectrum(canvas, analyser) {
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength);
+  analyser.getByteFrequencyData(dataArray);
+
+  ctx.clearRect(0, 0, w, h);
+
+  // Dark background
+  ctx.fillStyle = '#0f3460';
+  ctx.fillRect(0, 0, w, h);
+
+  const barWidth = Math.max(1, w / bufferLength);
+  for (let i = 0; i < bufferLength; i++) {
+    const value = dataArray[i] / 255; // 0-1
+    const barHeight = Math.max(1, value * h);
+
+    // Gradient from accent to dim
+    const t = i / bufferLength;
+    const r = Math.round(233 + (83 - 233) * t);
+    const g = Math.round(69 + (52 - 69) * t);
+    const b = Math.round(96 + (131 - 96) * t);
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+
+    ctx.fillRect(Math.floor(i * barWidth), h - barHeight, Math.ceil(barWidth), barHeight);
+  }
 }
 
 // ── Master timeline (overview + seek) ────────────────────
@@ -1022,7 +1101,16 @@ async function startPreviewFrom(seekTime) {
 
   const masterGain = ctx.createGain();
   masterGain.gain.value = 0.7;
-  masterGain.connect(ctx.destination);
+  state.masterGain = masterGain;
+
+  // Master analyser for real-time spectrum
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  analyser.smoothingTimeConstant = 0.7;
+  analyser.connect(ctx.destination);
+  masterGain.connect(analyser);
+  state.masterAnalyser = analyser;
+  if (masterSpectrum) masterSpectrum.style.display = 'block';
 
   const now = ctx.currentTime;
 
@@ -1076,7 +1164,7 @@ async function startPreviewFrom(seekTime) {
       continue;
     }
 
-    previewNodes.push({ source, gain: gainNode, eq: eqFilter, panner });
+    previewNodes.push({ source, gain: gainNode, eq: eqFilter, panner, layerId: layer.id });
   }
 
   state.playing = true;
