@@ -113,6 +113,7 @@ main {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
+  min-height: 0;
 }
 .layer-list::-webkit-scrollbar { width: 6px; }
 .layer-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -232,6 +233,7 @@ input[type="range"]::-webkit-slider-thumb:hover {
   flex: 1;
   overflow: auto;
   position: relative;
+  min-height: 0;
 }
 .timeline-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
 .timeline-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
