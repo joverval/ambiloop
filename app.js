@@ -426,8 +426,17 @@ function drawSpectrum(canvas, layer) {
   const eqQ = layer.eqQ;
   const eqGain = layer.eqGain;
 
+  // Pitch shift: +N semitones multiplies all frequencies by 2^(N/12)
+  // For each output bin, find the source frequency that maps to it
+  const pitchRatio = Math.pow(2, layer.pitchSemitones / 12);
+
   for (let i = 0; i < bars; i++) {
-    let db = Math.max(minDB, rawSpectrum[i]);
+    // Which raw frequency maps to this bin after pitch shift?
+    const srcFreq = binFreqs[i] / pitchRatio;
+    // Interpolate raw spectrum at that shifted frequency
+    let db = interpolateSpectrum(rawSpectrum, binFreqs, srcFreq);
+    db = Math.max(minDB, db);
+
     if (eqEnabled && binFreqs) {
       db += computeEQGain(binFreqs[i], eqType, eqFreq, eqQ, eqGain);
     }
@@ -465,6 +474,20 @@ function drawSpectrum(canvas, layer) {
     // Avoid overlapping labels — skip if too close to previous
     ctx.fillText(label, x, labelY);
   }
+}
+
+// Linear interpolation of spectrum dB value at targetFreq
+function interpolateSpectrum(spectrum, binFreqs, targetFreq) {
+  if (!binFreqs || binFreqs.length < 2) return spectrum[0] || -100;
+  if (targetFreq <= binFreqs[0]) return spectrum[0];
+  if (targetFreq >= binFreqs[binFreqs.length - 1]) return spectrum[binFreqs.length - 1];
+  for (let j = 0; j < binFreqs.length - 1; j++) {
+    if (targetFreq >= binFreqs[j] && targetFreq <= binFreqs[j + 1]) {
+      const t = (targetFreq - binFreqs[j]) / (binFreqs[j + 1] - binFreqs[j]);
+      return spectrum[j] + t * (spectrum[j + 1] - spectrum[j]);
+    }
+  }
+  return spectrum[spectrum.length - 1];
 }
 
 // ── EQ filter transfer function ────────────────────────
