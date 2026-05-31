@@ -19,7 +19,7 @@ const state = {
 
 // ── DOM refs ──────────────────────────────────────────
 const $ = (s) => document.querySelector(s);
-const dropZone = $('#dropZone');
+const fileBtn = $('#fileBtn');
 const fileInput = $('#fileInput');
 const layerList = $('#layerList');
 const layerCount = $('#layerCount');
@@ -307,21 +307,23 @@ layerList.addEventListener('click', (e) => {
   }
 });
 
-// ── File drop / pick ───────────────────────────────────
-dropZone.addEventListener('click', () => fileInput.click());
+// ── File load: button + drag/drop on body ──────────────
+fileBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => {
   if (fileInput.files.length) loadFiles(fileInput.files);
   fileInput.value = '';
 });
 
-dropZone.addEventListener('dragover', (e) => {
+document.addEventListener('dragover', (e) => {
   e.preventDefault();
-  dropZone.classList.add('drag-over');
+  if (e.dataTransfer.types.includes('Files')) document.body.classList.add('drag-over');
 });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-dropZone.addEventListener('drop', (e) => {
+document.addEventListener('dragleave', (e) => {
+  if (!document.body.contains(e.relatedTarget)) document.body.classList.remove('drag-over');
+});
+document.addEventListener('drop', (e) => {
   e.preventDefault();
-  dropZone.classList.remove('drag-over');
+  document.body.classList.remove('drag-over');
   if (e.dataTransfer.files.length) loadFiles(e.dataTransfer.files);
 });
 

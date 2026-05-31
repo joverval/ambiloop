@@ -8,28 +8,13 @@
 </head>
 <body>
 
-<header>
+<header class="top-bar">
   <span class="logo">ambiloop</span>
   <span class="subtitle">ambient audio layer composer</span>
-  <div class="header-actions">
-    <label class="crossfade-option" title="Blend tail into head for seamless looping">
-      <input type="checkbox" id="crossfadeToggle">
-      <span>Loop</span>
-      <input type="number" id="crossfadeDur" value="2.0" min="0.1" max="10" step="0.5" disabled>
-      <span>s</span>
-    </label>
-    <button id="exportBtn" disabled>Export WAV</button>
-  </div>
-</header>
-
-<div id="dropZone" class="drop-zone">
-  <div class="drop-message">
-    <span class="drop-icon">+</span>
-    <span>Drop audio files here or click to browse</span>
-    <span class="drop-formats">MP3, WAV, OGG, FLAC</span>
-  </div>
+  <button id="fileBtn" class="btn-top">+ Add Files</button>
   <input type="file" id="fileInput" multiple accept="audio/*" hidden>
-</div>
+  <button id="exportBtn" class="btn-top" disabled>Export WAV</button>
+</header>
 
 <main>
   <div id="layersPanel" class="layers-panel">
@@ -38,7 +23,7 @@
       <span id="layerCount" class="count">0</span>
     </div>
     <div id="layerList" class="layer-list">
-      <div class="empty-state">Drop audio files to begin</div>
+      <div class="empty-state">Add audio files to begin</div>
     </div>
   </div>
 
@@ -55,30 +40,38 @@
   </div>
 </main>
 
-<div id="masterBar" class="master-bar">
-  <div class="master-bar-header">
-    <span class="master-bar-label">Composition</span>
-    <span id="masterTime" class="master-bar-time"></span>
+<div class="bottom-bar">
+  <div id="masterBar" class="master-bar">
+    <div class="master-bar-header">
+      <span class="master-bar-label">Composition</span>
+      <span id="masterTime" class="master-bar-time"></span>
+    </div>
+    <div class="master-timeline-wrapper">
+      <div id="masterTimeline" class="master-timeline"></div>
+      <div id="masterPlayhead" class="master-playhead"></div>
+    </div>
   </div>
-  <div class="master-timeline-wrapper">
-    <div id="masterTimeline" class="master-timeline"></div>
-    <div id="masterPlayhead" class="master-playhead"></div>
-  </div>
-</div>
 
-<footer>
-  <div class="transport">
-    <button id="playBtn" disabled title="Play all layers">&#9654; Play</button>
-    <button id="stopBtn" disabled title="Stop">&#9632; Stop</button>
-    <button id="splitBtn" title="Split tool: click a block to cut it">&#9986; Split</button>
-    <label class="zoom-control" title="Timeline zoom">
-      <span>&#8981;</span>
-      <input type="range" id="zoomSlider" min="10" max="160" value="40" step="5">
-      <span>&#8982;</span>
-    </label>
-  </div>
-  <div id="statusBar" class="status-bar">Ready</div>
-</footer>
+  <footer>
+    <div class="transport">
+      <button id="playBtn" disabled title="Play all layers">&#9654; Play</button>
+      <button id="stopBtn" disabled title="Stop">&#9632; Stop</button>
+      <button id="splitBtn" title="Split tool: click a block to cut it">&#9986; Split</button>
+      <label class="crossfade-option" title="Blend tail into head for seamless looping">
+        <input type="checkbox" id="crossfadeToggle">
+        <span>Loop</span>
+        <input type="number" id="crossfadeDur" value="2.0" min="0.1" max="10" step="0.5" disabled>
+        <span>s</span>
+      </label>
+      <label class="zoom-control" title="Timeline zoom">
+        <span>&#8981;</span>
+        <input type="range" id="zoomSlider" min="10" max="160" value="40" step="5">
+        <span>&#8982;</span>
+      </label>
+    </div>
+    <div id="statusBar" class="status-bar">Ready. Add audio files to begin.</div>
+  </footer>
+</div>
 
 <script src="app.js"></script>
 </body>
