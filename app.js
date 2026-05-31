@@ -11,7 +11,8 @@ const state = {
   playing: false,
   nextId: 1,
   loopCrossfade: 2.0,   // seconds, 0 = disabled
-  dragging: null        // { id, startX, startOffset }
+  dragging: null,        // { id, startX, startOffset }
+  splitMode: false       // split tool active
 };
 
 // ── DOM refs ──────────────────────────────────────────
@@ -29,6 +30,7 @@ const exportBtn = $('#exportBtn');
 const statusBar = $('#statusBar');
 const crossfadeToggle = $('#crossfadeToggle');
 const crossfadeDur = $('#crossfadeDur');
+const splitBtn = $('#splitBtn');
 
 // ── State helpers ──────────────────────────────────────
 function setStatus(msg) { statusBar.textContent = msg; }
@@ -272,6 +274,11 @@ timelineTracks.addEventListener('mousedown', (e) => {
   const layer = state.layers.find(l => l.id === id);
   if (!layer) return;
 
+  if (state.splitMode) {
+    splitLayerAt(layer, block, e);
+    return;
+  }
+
   state.dragging = {
     id: id,
     startX: e.clientX,
@@ -313,6 +320,48 @@ document.addEventListener('mouseup', () => {
   state.dragging = null;
   renderAll(); // sync layer list inputs
 });
+
+// ── Split tool ──────────────────────────────────────────
+function splitLayerAt(layer, block, clickEvent) {
+  const rect = block.getBoundingClientRect();
+  const clickX = clickEvent.clientX - rect.left;
+  const fraction = Math.max(0.05, Math.min(0.95, clickX / rect.width));
+  const trimmedDur = layer.trimEnd - layer.trimStart;
+  const splitTime = layer.trimStart + fraction * trimmedDur;
+
+  // Snap to 0.1s
+  const cutPoint = Math.round(splitTime * 10) / 10;
+
+  // Reject if cut is too close to edges
+  if (cutPoint <= layer.trimStart + 0.15 || cutPoint >= layer.trimEnd - 0.15) {
+    setStatus('Click closer to the middle of the block to split');
+    return;
+  }
+
+  // Right side becomes a new layer
+  const rightLayer = {
+    id: state.nextId++,
+    name: layer.name + ' (split)',
+    buffer: layer.buffer,
+    gain: layer.gain,
+    pitchSemitones: layer.pitchSemitones,
+    color: LAYER_COLORS[(state.layers.length) % LAYER_COLORS.length],
+    muted: false,
+    trimStart: cutPoint,
+    trimEnd: layer.trimEnd,
+    offset: layer.offset + (cutPoint - layer.trimStart)
+  };
+
+  // Current layer gets trimmed at the cut point
+  layer.trimEnd = cutPoint;
+
+  // Insert right after the current layer
+  const idx = state.layers.indexOf(layer);
+  state.layers.splice(idx + 1, 0, rightLayer);
+
+  setStatus(`Split at ${cutPoint.toFixed(1)}s → new layer "${rightLayer.name}"`);
+  renderAll();
+}
 
 // ── Preview playback ───────────────────────────────────
 let previewNodes = [];
@@ -636,6 +685,17 @@ document.addEventListener('keydown', (e) => {
 if (crossfadeToggle && crossfadeDur) {
   crossfadeToggle.addEventListener('change', () => {
     crossfadeDur.disabled = !crossfadeToggle.checked;
+  });
+}
+
+// ── Split tool toggle ──────────────────────────────────
+if (splitBtn) {
+  splitBtn.addEventListener('click', () => {
+    state.splitMode = !state.splitMode;
+    splitBtn.classList.toggle('active', state.splitMode);
+    splitBtn.textContent = state.splitMode ? '\u2702 Split (ON)' : '\u2702 Split';
+    timelineScroll.classList.toggle('split-mode', state.splitMode);
+    setStatus(state.splitMode ? 'Split tool active — click a block to cut it' : 'Ready');
   });
 }
 

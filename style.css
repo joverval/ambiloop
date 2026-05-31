@@ -334,12 +334,11 @@ input[type="range"]::-webkit-slider-thumb {
 }
 .trim-offset-row {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 .trim-offset-row .layer-control {
-  flex: 1;
-  min-width: 80px;
+  flex: 0 0 auto;
 }
 .layer-value {
   font-family: var(--mono);
@@ -350,18 +349,25 @@ input[type="range"]::-webkit-slider-thumb {
 
 /* Number inputs */
 .num-input {
-  width: 100%;
+  width: 64px;
+  min-width: 52px;
+  flex-shrink: 0;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text);
   font-family: var(--mono);
-  font-size: 0.75rem;
-  padding: 3px 6px;
+  font-size: 0.78rem;
+  padding: 4px 6px;
   outline: none;
+  text-align: right;
 }
 .num-input:focus {
   border-color: var(--accent-dim);
+  background: var(--bg-panel);
+}
+.num-input::-webkit-inner-spin-button {
+  opacity: 0.6;
 }
 .slider {
   flex: 1;
@@ -421,6 +427,8 @@ footer {
 .transport button:hover:not(:disabled) { background: var(--accent-dim); }
 .transport button:disabled { opacity: 0.3; cursor: not-allowed; }
 #playBtn.playing { background: var(--accent); border-color: var(--accent); }
+#splitBtn.active { background: var(--accent-dim); border-color: var(--accent); }
+.split-mode .timeline-block { cursor: col-resize !important; }
 
 .status-bar {
   font-size: 0.75rem;
