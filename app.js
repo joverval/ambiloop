@@ -3,7 +3,6 @@
 // Added: per-layer trim, offset, timeline blocks with drag, crossfade looping
 
 const LAYER_COLORS = ['#e94560','#0f3460','#533483','#2ecc71','#f39c12','#3498db','#e74c3c','#1abc9c'];
-const TIMELINE_SCALE = 40; // pixels per second
 
 const state = {
   layers: [],           // { id, name, buffer, gain, pitchSemitones, color, muted, trimStart, trimEnd, offset }
@@ -12,7 +11,10 @@ const state = {
   nextId: 1,
   loopCrossfade: 2.0,   // seconds, 0 = disabled
   dragging: null,        // { id, startX, startOffset }
-  splitMode: false       // split tool active
+  splitMode: false,      // split tool active
+  zoom: 40,             // pixels per second — timeline scale
+  previewStartTime: 0,  // AudioContext.currentTime when preview started (for playhead)
+  animFrame: null       // requestAnimationFrame ID for playhead
 };
 
 // ── DOM refs ──────────────────────────────────────────
@@ -31,6 +33,10 @@ const statusBar = $('#statusBar');
 const crossfadeToggle = $('#crossfadeToggle');
 const crossfadeDur = $('#crossfadeDur');
 const splitBtn = $('#splitBtn');
+const zoomSlider = $('#zoomSlider');
+const masterTimeline = $('#masterTimeline');
+const masterPlayhead = $('#masterPlayhead');
+const masterTime = $('#masterTime');
 
 // ── State helpers ──────────────────────────────────────
 function setStatus(msg) { statusBar.textContent = msg; }
@@ -104,6 +110,7 @@ async function loadFiles(files) {
 function renderAll() {
   renderLayers();
   renderTimeline();
+  renderMasterTimeline();
   updateButtons();
   layerCount.textContent = state.layers.length;
 }
@@ -122,6 +129,7 @@ function renderLayers() {
         <span class="layer-color" style="background:${l.color}"></span>
         <span class="layer-name" title="${l.name}">${l.name}</span>
         <span class="layer-dur">${formatTime(dur)}</span>
+        <button class="layer-duplicate" data-action="duplicate" data-id="${l.id}" title="Duplicate">&#9112;</button>
         <button class="layer-remove" data-action="remove" data-id="${l.id}">&times;</button>
       </div>
 
@@ -172,13 +180,13 @@ function renderTimeline() {
   }
 
   const totalDur = getTotalDuration();
-  const totalWidth = totalDur * TIMELINE_SCALE;
+  const totalWidth = totalDur * state.zoom;
 
   // Ruler with time markers
   let rulerHTML = '';
   const tickInterval = totalDur > 60 ? 10 : (totalDur > 30 ? 5 : 1);
   for (let t = 0; t <= totalDur; t += tickInterval) {
-    const x = t * TIMELINE_SCALE;
+    const x = t * state.zoom;
     rulerHTML += `<span class="ruler-tick" style="left:${x}px">${formatTime(t)}</span>`;
   }
   timelineRuler.innerHTML = rulerHTML;
@@ -187,8 +195,8 @@ function renderTimeline() {
   // Tracks with blocks
   timelineTracks.innerHTML = state.layers.map(l => {
     const trimmedDur = getTrimmedDuration(l);
-    const left = l.offset * TIMELINE_SCALE;
-    const width = Math.max(trimmedDur * TIMELINE_SCALE, 4); // min 4px
+    const left = l.offset * state.zoom;
+    const width = Math.max(trimmedDur * state.zoom, 4); // min 4px
     const leftPct = (l.offset / l.buffer.duration * 100).toFixed(0);
     const widthPct = (trimmedDur / l.buffer.duration * 100).toFixed(0);
 
@@ -238,11 +246,15 @@ layerList.addEventListener('input', (e) => {
 });
 
 layerList.addEventListener('click', (e) => {
-  if (e.target.dataset.action === 'remove') {
-    const id = parseInt(e.target.dataset.id);
+  const action = e.target.dataset.action;
+  const id = parseInt(e.target.dataset.id);
+
+  if (action === 'remove') {
     state.layers = state.layers.filter(l => l.id !== id);
     renderAll();
     if (state.playing) stopPreview();
+  } else if (action === 'duplicate') {
+    duplicateLayer(id);
   }
 });
 
@@ -295,18 +307,18 @@ document.addEventListener('mousemove', (e) => {
   if (!layer) return;
 
   const dx = e.clientX - state.dragging.startX;
-  const newOffset = state.dragging.startOffset + dx / TIMELINE_SCALE;
+  const newOffset = state.dragging.startOffset + dx / state.zoom;
   layer.offset = Math.max(0, Math.round(newOffset * 10) / 10); // snap to 0.1s
 
   // Live update the block position
   const block = timelineTracks.querySelector(`.timeline-block[data-id="${layer.id}"]`);
   if (block) {
-    block.style.left = (layer.offset * TIMELINE_SCALE) + 'px';
+    block.style.left = (layer.offset * state.zoom) + 'px';
   }
 
   // Update ruler/tracks width if needed
   const totalDur = getTotalDuration();
-  const totalWidth = totalDur * TIMELINE_SCALE;
+  const totalWidth = totalDur * state.zoom;
   timelineRuler.style.width = totalWidth + 'px';
   timelineTracks.style.width = totalWidth + 'px';
 });
@@ -363,6 +375,31 @@ function splitLayerAt(layer, block, clickEvent) {
   renderAll();
 }
 
+// ── Duplicate layer ─────────────────────────────────────
+function duplicateLayer(id) {
+  const layer = state.layers.find(l => l.id === id);
+  if (!layer) return;
+
+  const clone = {
+    id: state.nextId++,
+    name: layer.name + ' (copy)',
+    buffer: layer.buffer,
+    gain: layer.gain,
+    pitchSemitones: layer.pitchSemitones,
+    color: LAYER_COLORS[(state.layers.length) % LAYER_COLORS.length],
+    muted: layer.muted,
+    trimStart: layer.trimStart,
+    trimEnd: layer.trimEnd,
+    offset: layer.offset
+  };
+
+  const idx = state.layers.indexOf(layer);
+  state.layers.splice(idx + 1, 0, clone);
+
+  setStatus(`Duplicated "${layer.name}"`);
+  renderAll();
+}
+
 // ── Preview playback ───────────────────────────────────
 let previewNodes = [];
 
@@ -374,6 +411,8 @@ function stopPreview() {
   state.playing = false;
   playBtn.classList.remove('playing');
   playBtn.innerHTML = '&#9654; Play';
+  if (state.animFrame) { cancelAnimationFrame(state.animFrame); state.animFrame = null; }
+  if (masterPlayhead) masterPlayhead.style.display = 'none';
 }
 
 async function startPreview() {
@@ -419,6 +458,136 @@ async function startPreview() {
   playBtn.classList.add('playing');
   playBtn.innerHTML = '&#9646;&#9646; Pause';
   setStatus('Playing...');
+
+  // Start playhead animation
+  state.previewStartTime = ctx.currentTime;
+  if (masterPlayhead) masterPlayhead.style.display = 'block';
+  animatePlayhead();
+}
+
+// ── Playhead animation ──────────────────────────────────
+function animatePlayhead() {
+  if (!state.playing) return;
+  const elapsed = state.audioCtx.currentTime - state.previewStartTime;
+  const totalDur = getTotalDuration();
+
+  if (masterPlayhead) {
+    const pct = Math.min((elapsed / totalDur) * 100, 100);
+    masterPlayhead.style.left = pct + '%';
+  }
+  if (masterTime) {
+    masterTime.textContent = formatTime(elapsed) + ' / ' + formatTime(totalDur);
+  }
+
+  state.animFrame = requestAnimationFrame(animatePlayhead);
+}
+
+// ── Master timeline (overview + seek) ────────────────────
+function renderMasterTimeline() {
+  if (!masterTimeline) return;
+  if (state.layers.length === 0) {
+    masterTimeline.innerHTML = '';
+    if (masterPlayhead) masterPlayhead.style.display = 'none';
+    if (masterTime) masterTime.textContent = '';
+    return;
+  }
+
+  const totalDur = getTotalDuration();
+  // Draw a thin colored band for each layer showing its position in the total mix
+  masterTimeline.innerHTML = state.layers.map(l => {
+    const trimmedDur = getTrimmedDuration(l);
+    const leftPct = (l.offset / totalDur) * 100;
+    const widthPct = (trimmedDur / totalDur) * 100;
+    return `<div class="master-layer-band" style="left:${leftPct}%;width:${widthPct}%;background:${l.color}" title="${l.name}"></div>`;
+  }).join('');
+
+  if (masterTime) {
+    masterTime.textContent = '0:00 / ' + formatTime(totalDur);
+  }
+}
+
+// ── Seek to position ────────────────────────────────────
+function seekTo(frac) {
+  if (state.playing) stopPreview();
+
+  const totalDur = getTotalDuration();
+  const seekTime = frac * totalDur;
+
+  // Update playhead position visually
+  if (masterPlayhead) {
+    masterPlayhead.style.left = (frac * 100) + '%';
+    masterPlayhead.style.display = 'block';
+  }
+  if (masterTime) {
+    masterTime.textContent = formatTime(seekTime) + ' / ' + formatTime(totalDur);
+  }
+
+  // Always start from seek position
+  startPreviewFrom(seekTime);
+}
+
+// ── Preview from specific time ───────────────────────────
+async function startPreviewFrom(seekTime) {
+  if (state.layers.length === 0) return;
+
+  const ctx = getAudioCtx();
+  stopPreview();
+
+  const masterGain = ctx.createGain();
+  masterGain.gain.value = 0.7;
+  masterGain.connect(ctx.destination);
+
+  const now = ctx.currentTime;
+
+  for (const layer of state.layers) {
+    if (layer.muted) continue;
+
+    const trimmedDur = getTrimmedDuration(layer);
+    const layerEnd = layer.offset + trimmedDur;
+    const source = ctx.createBufferSource();
+    source.buffer = layer.buffer;
+    source.loop = true;
+
+    if (layer.trimStart > 0 || layer.trimEnd < layer.buffer.duration) {
+      source.loopStart = layer.trimStart;
+      source.loopEnd = layer.trimEnd;
+    }
+
+    const rate = Math.pow(2, layer.pitchSemitones / 12);
+    source.playbackRate.value = rate;
+
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = layer.gain;
+
+    source.connect(gainNode);
+    gainNode.connect(masterGain);
+
+    // Calculate when (relative to 'now') this layer should start
+    // and what offset into its audio to begin at
+    if (seekTime <= layer.offset) {
+      // Layer hasn't started yet — schedule it
+      const delay = layer.offset - seekTime;
+      source.start(now + delay, 0);
+    } else if (seekTime < layerEnd) {
+      // Layer is mid-playback
+      const localPos = seekTime - layer.offset;
+      source.start(now, layer.trimStart + localPos);
+    } else {
+      // Layer already finished — skip
+      continue;
+    }
+
+    previewNodes.push({ source, gain: gainNode });
+  }
+
+  state.playing = true;
+  playBtn.classList.add('playing');
+  playBtn.innerHTML = '&#9646;&#9646; Pause';
+  setStatus('Playing from ' + formatTime(seekTime) + '...');
+
+  state.previewStartTime = ctx.currentTime - seekTime; // so elapsed = ctx.currentTime - previewStartTime = seekTime
+  if (masterPlayhead) masterPlayhead.style.display = 'block';
+  animatePlayhead();
 }
 
 playBtn.addEventListener('click', () => {
@@ -696,6 +865,25 @@ if (splitBtn) {
     splitBtn.textContent = state.splitMode ? '\u2702 Split (ON)' : '\u2702 Split';
     timelineScroll.classList.toggle('split-mode', state.splitMode);
     setStatus(state.splitMode ? 'Split tool active — click a block to cut it' : 'Ready');
+  });
+}
+
+// ── Zoom control ────────────────────────────────────────
+if (zoomSlider) {
+  zoomSlider.addEventListener('input', () => {
+    state.zoom = parseInt(zoomSlider.value);
+    renderTimeline();
+    renderMasterTimeline();
+  });
+}
+
+// ── Master timeline click-to-seek ───────────────────────
+if (masterTimeline) {
+  masterTimeline.addEventListener('click', (e) => {
+    if (state.layers.length === 0) return;
+    const rect = masterTimeline.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    seekTo(frac);
   });
 }
 

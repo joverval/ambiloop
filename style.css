@@ -197,6 +197,19 @@ main {
   line-height: 1;
 }
 .layer-remove:hover { color: var(--accent); background: rgba(233,69,96,0.1); }
+.layer-duplicate {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 2px 5px;
+  border-radius: 4px;
+  line-height: 1;
+  margin-right: 4px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.layer-duplicate:hover { color: var(--success); border-color: var(--success); }
 
 .layer-control {
   display: flex;
@@ -482,3 +495,87 @@ footer {
   cursor: pointer;
 }
 .preset-bar button:hover { color: var(--text); border-color: var(--accent-dim); }
+
+/* Zoom control */
+.zoom-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  cursor: default;
+  margin-left: 12px;
+  padding: 0 4px;
+}
+.zoom-control input[type="range"] {
+  width: 80px;
+  height: 3px;
+  background: var(--slider-track);
+  cursor: pointer;
+}
+.zoom-control input[type="range"]::-webkit-slider-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  cursor: pointer;
+}
+
+/* Master composition bar */
+.master-bar {
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  padding: 6px 20px 8px;
+}
+.master-bar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.master-bar-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+.master-bar-time {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+.master-timeline-wrapper {
+  position: relative;
+  height: 24px;
+  background: var(--bg-surface);
+  border-radius: 4px;
+  cursor: pointer;
+  overflow: hidden;
+}
+.master-timeline-wrapper:hover {
+  box-shadow: 0 0 0 1px var(--accent-dim);
+}
+.master-timeline {
+  position: absolute;
+  inset: 0;
+}
+.master-layer-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  opacity: 0.7;
+  pointer-events: none;
+}
+.master-playhead {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--accent);
+  pointer-events: none;
+  display: none;
+  z-index: 2;
+  box-shadow: 0 0 6px rgba(233,69,96,0.5);
+}

@@ -55,11 +55,27 @@
   </div>
 </main>
 
+<div id="masterBar" class="master-bar">
+  <div class="master-bar-header">
+    <span class="master-bar-label">Composition</span>
+    <span id="masterTime" class="master-bar-time"></span>
+  </div>
+  <div class="master-timeline-wrapper">
+    <div id="masterTimeline" class="master-timeline"></div>
+    <div id="masterPlayhead" class="master-playhead"></div>
+  </div>
+</div>
+
 <footer>
   <div class="transport">
     <button id="playBtn" disabled title="Play all layers">&#9654; Play</button>
     <button id="stopBtn" disabled title="Stop">&#9632; Stop</button>
     <button id="splitBtn" title="Split tool: click a block to cut it">&#9986; Split</button>
+    <label class="zoom-control" title="Timeline zoom">
+      <span>&#8981;</span>
+      <input type="range" id="zoomSlider" min="10" max="160" value="40" step="5">
+      <span>&#8982;</span>
+    </label>
   </div>
   <div id="statusBar" class="status-bar">Ready</div>
 </footer>
