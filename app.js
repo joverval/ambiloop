@@ -98,7 +98,8 @@ async function loadFiles(files) {
         eqType: 'peaking',
         eqFreq: 1000,
         eqQ: 1.0,
-        eqGain: 0
+        eqGain: 0,
+        pan: 0              // -1 (left) to 1 (right), 0 = center
       };
 
       state.layers.push(layer);
@@ -143,14 +144,24 @@ function renderLayers() {
           <span class="layer-label">Vol</span>
           <input type="range" min="0" max="100" value="${Math.round(l.gain * 100)}"
                  data-action="gain" data-id="${l.id}" class="slider">
-          <span class="layer-value">${Math.round(l.gain * 100)}%</span>
+          <input type="number" value="${Math.round(l.gain * 100)}" min="0" max="100"
+                 data-action="gain" data-id="${l.id}" class="layer-value num-input">
         </div>
 
         <div class="layer-control">
           <span class="layer-label">Pitch</span>
           <input type="range" min="-24" max="24" value="${l.pitchSemitones}" step="0.5"
                  data-action="pitch" data-id="${l.id}" class="slider">
-          <span class="layer-value">${l.pitchSemitones > 0 ? '+' : ''}${l.pitchSemitones.toFixed(1)} st</span>
+          <input type="number" value="${l.pitchSemitones.toFixed(1)}" min="-24" max="24" step="0.5"
+                 data-action="pitch" data-id="${l.id}" class="layer-value num-input">
+        </div>
+
+        <div class="layer-control">
+          <span class="layer-label">Pan</span>
+          <input type="range" min="-100" max="100" value="${Math.round(l.pan * 100)}"
+                 data-action="pan" data-id="${l.id}" class="slider">
+          <input type="number" value="${Math.round(l.pan * 100)}" min="-100" max="100"
+                 data-action="pan" data-id="${l.id}" class="layer-value num-input">
         </div>
 
         <div class="layer-control trim-offset-row">
@@ -191,19 +202,22 @@ function renderLayers() {
             <span class="layer-label">Freq</span>
             <input type="range" min="20" max="20000" value="${l.eqFreq}" step="1"
                    data-action="eqFreq" data-id="${l.id}" class="slider">
-            <span class="layer-value">${l.eqFreq < 1000 ? l.eqFreq + ' Hz' : (l.eqFreq/1000).toFixed(1) + ' kHz'}</span>
+            <input type="number" value="${l.eqFreq}" min="20" max="20000" step="1"
+                   data-action="eqFreq" data-id="${l.id}" class="layer-value num-input">
           </div>
           <div class="layer-control">
             <span class="layer-label">Q</span>
             <input type="range" min="0.1" max="10" value="${l.eqQ}" step="0.1"
                    data-action="eqQ" data-id="${l.id}" class="slider">
-            <span class="layer-value">${l.eqQ.toFixed(1)}</span>
+            <input type="number" value="${l.eqQ.toFixed(1)}" min="0.1" max="10" step="0.1"
+                   data-action="eqQ" data-id="${l.id}" class="layer-value num-input">
           </div>
           <div class="layer-control eq-gain-row ${l.eqType === 'lowpass' || l.eqType === 'highpass' || l.eqType === 'bandpass' || l.eqType === 'notch' ? 'hidden' : ''}">
             <span class="layer-label">Gain</span>
             <input type="range" min="-20" max="20" value="${l.eqGain}" step="0.5"
                    data-action="eqGain" data-id="${l.id}" class="slider">
-            <span class="layer-value">${l.eqGain > 0 ? '+' : ''}${l.eqGain.toFixed(1)} dB</span>
+            <input type="number" value="${l.eqGain.toFixed(1)}" min="-20" max="20" step="0.5"
+                   data-action="eqGain" data-id="${l.id}" class="layer-value num-input">
           </div>
         </div>
       </div>
@@ -311,47 +325,59 @@ function formatTime(sec) {
 }
 
 // ── Event delegation for layer controls ────────────────
+// Apply a value to a layer property based on action
+function applyLayerValue(layer, action, value) {
+  if (action === 'gain') {
+    layer.gain = value / 100;
+  } else if (action === 'pitch') {
+    layer.pitchSemitones = parseFloat(value);
+  } else if (action === 'pan') {
+    layer.pan = parseInt(value) / 100;
+  } else if (action === 'offset') {
+    layer.offset = parseFloat(value) || 0;
+  } else if (action === 'trimStart') {
+    const val = parseFloat(value) || 0;
+    layer.trimStart = Math.max(0, Math.min(val, layer.buffer.duration));
+  } else if (action === 'trimEnd') {
+    const val = parseFloat(value) || layer.buffer.duration;
+    layer.trimEnd = Math.max(0, Math.min(val, layer.buffer.duration));
+  } else if (action === 'eqFreq') {
+    layer.eqFreq = parseInt(value);
+  } else if (action === 'eqQ') {
+    layer.eqQ = parseFloat(value);
+  } else if (action === 'eqGain') {
+    layer.eqGain = parseFloat(value);
+  } else if (action === 'eqType') {
+    layer.eqType = value;
+  }
+}
+
+// Sliders: live update on 'input' (continuous drag)
 layerList.addEventListener('input', (e) => {
+  if (e.target.type !== 'range') return;
+  const id = parseInt(e.target.dataset.id);
+  const layer = state.layers.find(l => l.id === id);
+  if (!layer) return;
+  applyLayerValue(layer, e.target.dataset.action, e.target.value);
+  renderAll();
+});
+
+// Number inputs + selects: update on 'change' (blur/Enter — keeps focus during typing)
+layerList.addEventListener('change', (e) => {
+  const action = e.target.dataset.action;
+  if (!action) return;
+  const tag = e.target.tagName;
+  const type = e.target.type;
+
+  // Only handle number inputs and selects here
+  if (!((tag === 'INPUT' && type === 'number') || tag === 'SELECT')) return;
+
   const id = parseInt(e.target.dataset.id);
   const layer = state.layers.find(l => l.id === id);
   if (!layer) return;
 
-  const action = e.target.dataset.action;
-  if (action === 'gain') {
-    layer.gain = e.target.value / 100;
-  } else if (action === 'pitch') {
-    layer.pitchSemitones = parseFloat(e.target.value);
-  } else if (action === 'offset') {
-    layer.offset = parseFloat(e.target.value) || 0;
-  } else if (action === 'trimStart') {
-    const val = parseFloat(e.target.value) || 0;
-    layer.trimStart = Math.max(0, Math.min(val, layer.buffer.duration));
-  } else if (action === 'trimEnd') {
-    const val = parseFloat(e.target.value) || layer.buffer.duration;
-    layer.trimEnd = Math.max(0, Math.min(val, layer.buffer.duration));
-  } else if (action === 'eqFreq') {
-    layer.eqFreq = parseInt(e.target.value);
-  } else if (action === 'eqQ') {
-    layer.eqQ = parseFloat(e.target.value);
-  } else if (action === 'eqGain') {
-    layer.eqGain = parseFloat(e.target.value);
-  } else if (action === 'eqType') {
-    layer.eqType = e.target.value;
-  }
-
+  applyLayerValue(layer, action, e.target.value);
   renderAll();
-});
-
-// 'change' for select elements
-layerList.addEventListener('change', (e) => {
-  if (e.target.dataset.action === 'eqType') {
-    const id = parseInt(e.target.dataset.id);
-    const layer = state.layers.find(l => l.id === id);
-    if (layer) {
-      layer.eqType = e.target.value;
-      renderAll();
-    }
-  }
 });
 
 layerList.addEventListener('click', (e) => {
@@ -483,7 +509,8 @@ function splitLayerAt(layer, block, clickEvent) {
     eqType: layer.eqType,
     eqFreq: layer.eqFreq,
     eqQ: layer.eqQ,
-    eqGain: layer.eqGain
+    eqGain: layer.eqGain,
+    pan: layer.pan
   };
 
   // Current layer gets trimmed at the cut point
@@ -517,7 +544,8 @@ function duplicateLayer(id) {
     eqType: layer.eqType,
     eqFreq: layer.eqFreq,
     eqQ: layer.eqQ,
-    eqGain: layer.eqGain
+    eqGain: layer.eqGain,
+    pan: layer.pan
   };
 
   const idx = state.layers.indexOf(layer);
@@ -589,16 +617,22 @@ async function startPreview() {
 
     // EQ filter chain
     const eqFilter = createEQFilter(ctx, layer);
+    let prevNode = source;
     if (eqFilter) {
-      source.connect(eqFilter);
-      eqFilter.connect(gainNode);
-    } else {
-      source.connect(gainNode);
+      prevNode.connect(eqFilter);
+      prevNode = eqFilter;
     }
-    gainNode.connect(masterGain);
+    prevNode.connect(gainNode);
+
+    // Stereo pan
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = layer.pan || 0;
+    gainNode.connect(panner);
+    panner.connect(masterGain);
+
     source.start(now + layer.offset, 0);
 
-    previewNodes.push({ source, gain: gainNode, eq: eqFilter });
+    previewNodes.push({ source, gain: gainNode, eq: eqFilter, panner });
   }
 
   state.playing = true;
@@ -708,13 +742,18 @@ async function startPreviewFrom(seekTime) {
 
     // EQ filter chain
     const eqFilter = createEQFilter(ctx, layer);
+    let prevNode = source;
     if (eqFilter) {
-      source.connect(eqFilter);
-      eqFilter.connect(gainNode);
-    } else {
-      source.connect(gainNode);
+      prevNode.connect(eqFilter);
+      prevNode = eqFilter;
     }
-    gainNode.connect(masterGain);
+    prevNode.connect(gainNode);
+
+    // Stereo pan
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = layer.pan || 0;
+    gainNode.connect(panner);
+    panner.connect(masterGain);
 
     // Calculate when (relative to 'now') this layer should start
     // and what offset into its audio to begin at
@@ -731,7 +770,7 @@ async function startPreviewFrom(seekTime) {
       continue;
     }
 
-    previewNodes.push({ source, gain: gainNode, eq: eqFilter });
+    previewNodes.push({ source, gain: gainNode, eq: eqFilter, panner });
   }
 
   state.playing = true;
@@ -872,13 +911,16 @@ function encodeWAV(audioBuffer) {
   writeString(view, 36, 'data');
   view.setUint32(40, dataSize, true);
 
-  // Write samples
+  // Write interleaved samples (handles mono and stereo)
   let offset = 44;
   for (let i = 0; i < length; i++) {
-    const sample = Math.max(-1, Math.min(1, data[i]));
-    const intVal = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-    view.setInt16(offset, intVal, true);
-    offset += 2;
+    for (let ch = 0; ch < numChannels; ch++) {
+      const chanData = numChannels > 1 ? audioBuffer.getChannelData(ch) : data;
+      const sample = Math.max(-1, Math.min(1, chanData[i]));
+      const intVal = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      view.setInt16(offset, intVal, true);
+      offset += 2;
+    }
   }
 
   return new Blob([buffer], { type: 'audio/wav' });
@@ -901,10 +943,11 @@ async function exportWAV() {
     const sr = state.layers[0].buffer.sampleRate;
     const totalDur = getTotalDuration();
     const totalSamples = Math.ceil(totalDur * sr);
-    const channels = 1; // Mono output
+    const channels = 2; // Stereo output
 
-    // Mix buffer
-    const mixBuffer = new Float32Array(totalSamples);
+    // Stereo mix buffers
+    const mixBufferL = new Float32Array(totalSamples);
+    const mixBufferR = new Float32Array(totalSamples);
 
     for (const layer of state.layers) {
       if (layer.muted) continue;
@@ -917,13 +960,11 @@ async function exportWAV() {
 
       if (trimmedLen < 1) continue;
 
-      // Create buffer with trimmed audio
-      const trimCtx = new OfflineAudioContext(channels, trimmedLen, sr);
-      const trimBuf = trimCtx.createBuffer(channels, trimmedLen, sr);
-      for (let ch = 0; ch < Math.min(channels, layer.buffer.numberOfChannels); ch++) {
-        const chanData = layer.buffer.getChannelData(ch).subarray(trimStartSample, trimEndSample);
-        trimBuf.copyToChannel(chanData, ch, 0);
-      }
+      // Create buffer with trimmed audio (mono source for processing)
+      const trimCtx = new OfflineAudioContext(1, trimmedLen, sr);
+      const trimBuf = trimCtx.createBuffer(1, trimmedLen, sr);
+      const chanData = layer.buffer.getChannelData(0).subarray(trimStartSample, trimEndSample);
+      trimBuf.copyToChannel(chanData, 0, 0);
 
       // Apply true pitch shift
       const shifted = await pitchShiftBuffer(trimBuf, layer.pitchSemitones);
@@ -950,13 +991,21 @@ async function exportWAV() {
       }
 
       const shiftedData = eqBuffer.getChannelData(0);
-      const gain = layer.gain;
 
-      // Place at offset
+      // Equal-power panning
+      const pan = layer.pan || 0;
+      const panAngle = (pan + 1) * Math.PI / 4;  // maps -1..1 to 0..PI/2
+      const gain = layer.gain;
+      const leftGain = Math.cos(panAngle) * gain;
+      const rightGain = Math.sin(panAngle) * gain;
+
+      // Place at offset — mix into stereo buffers
       const offsetSample = Math.floor(layer.offset * sr);
       const endSample = Math.min(offsetSample + shiftedData.length, totalSamples);
       for (let i = offsetSample; i < endSample; i++) {
-        mixBuffer[i] += shiftedData[i - offsetSample] * gain;
+        const sample = shiftedData[i - offsetSample];
+        mixBufferL[i] += sample * leftGain;
+        mixBufferR[i] += sample * rightGain;
       }
     }
 
@@ -965,38 +1014,41 @@ async function exportWAV() {
     if (crossfadeToggle.checked && cfDur > 0) {
       const fadeSamples = Math.min(Math.floor(cfDur * sr), Math.floor(totalSamples / 3));
       if (fadeSamples > 0) {
-        // Mix tail into head with crossfade
         const tailStart = totalSamples - fadeSamples;
         for (let i = 0; i < fadeSamples; i++) {
           const fadeIn = i / fadeSamples;
           const fadeOut = 1 - fadeIn;
-          mixBuffer[i] = mixBuffer[i] * fadeOut + mixBuffer[tailStart + i] * fadeIn;
+          mixBufferL[i] = mixBufferL[i] * fadeOut + mixBufferL[tailStart + i] * fadeIn;
+          mixBufferR[i] = mixBufferR[i] * fadeOut + mixBufferR[tailStart + i] * fadeIn;
         }
-        // Truncate to remove the tail that was merged
-        // (we keep the full buffer but the tail portion after crossfade is silent)
         for (let i = tailStart; i < totalSamples; i++) {
-          mixBuffer[i] *= 0;
+          mixBufferL[i] = 0;
+          mixBufferR[i] = 0;
         }
       }
     }
 
-    // Normalize to prevent clipping
-    const peak = mixBuffer.reduce((max, v) => Math.max(max, Math.abs(v)), 0);
+    // Normalize to prevent clipping (both channels)
+    const peakL = mixBufferL.reduce((max, v) => Math.max(max, Math.abs(v)), 0);
+    const peakR = mixBufferR.reduce((max, v) => Math.max(max, Math.abs(v)), 0);
+    const peak = Math.max(peakL, peakR);
     if (peak > 1.0) {
       const scale = 0.95 / peak;
       for (let i = 0; i < totalSamples; i++) {
-        mixBuffer[i] *= scale;
+        mixBufferL[i] *= scale;
+        mixBufferR[i] *= scale;
       }
     }
 
     setStatus('Encoding WAV...');
 
-    // Create output AudioBuffer
-    const outCtx = new OfflineAudioContext(1, totalSamples, sr);
-    const outBuf = outCtx.createBuffer(1, totalSamples, sr);
-    outBuf.copyToChannel(mixBuffer, 0, 0);
+    // Create stereo output AudioBuffer
+    const outCtx = new OfflineAudioContext(2, totalSamples, sr);
+    const outBuf = outCtx.createBuffer(2, totalSamples, sr);
+    outBuf.copyToChannel(mixBufferL, 0, 0);
+    outBuf.copyToChannel(mixBufferR, 1, 0);
 
-    // Encode to WAV
+    // Encode to WAV (stereo)
     const wavBlob = encodeWAV(outBuf);
 
     // Download
