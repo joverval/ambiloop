@@ -16,6 +16,7 @@ const state = {
   previewStartTime: 0,  // AudioContext.currentTime when preview started (for playhead)
   animFrame: null,       // requestAnimationFrame ID for playhead
   selectedId: null,      // selected layer ID for keyboard shortcuts
+  loopTimeout: null,     // setTimeout ID for composition-level loop restart
   undoStack: [],         // [{layers, loopCrossfade}, ...]
   redoStack: []
 };
@@ -1060,6 +1061,7 @@ function createEQFilter(ctx, layer) {
 }
 
 function stopPreview() {
+  if (state.loopTimeout) { clearTimeout(state.loopTimeout); state.loopTimeout = null; }
   previewNodes.forEach(n => {
     try { n.source.stop(); } catch(e) {}
   });
@@ -1103,26 +1105,40 @@ async function startPreview() {
 
   const now = ctx.currentTime;
   const hasAnySolo = state.layers.some(l => l.solo);
+  const totalDur = getTotalDuration();
 
   for (const layer of state.layers) {
     if (layer.muted) continue;
     if (hasAnySolo && !layer.solo) continue;
 
+    const trimmedDur = getTrimmedDuration(layer);
     const source = ctx.createBufferSource();
     source.buffer = layer.buffer;
-    source.loop = true;
-
-    // Trim as loop region
-    if (layer.trimStart > 0 || layer.trimEnd < layer.buffer.duration) {
-      source.loopStart = layer.trimStart;
-      source.loopEnd = layer.trimEnd;
-    }
 
     const rate = Math.pow(2, layer.pitchSemitones / 12);
     source.playbackRate.value = rate;
 
     const gainNode = ctx.createGain();
-    gainNode.gain.value = layer.volumeActive !== false ? layer.gain : 0;
+    const finalGain = layer.volumeActive !== false ? layer.gain : 0;
+
+    // Fade in/out gain envelopes
+    if (layer.fadeIn > 0 && layer.fadeOut > 0) {
+      gainNode.gain.setValueAtTime(0, now + layer.offset);
+      gainNode.gain.linearRampToValueAtTime(finalGain, now + layer.offset + layer.fadeIn);
+      const fadeOutStart = now + layer.offset + trimmedDur - layer.fadeOut;
+      gainNode.gain.setValueAtTime(finalGain, fadeOutStart);
+      gainNode.gain.linearRampToValueAtTime(0, fadeOutStart + layer.fadeOut);
+    } else if (layer.fadeIn > 0) {
+      gainNode.gain.setValueAtTime(0, now + layer.offset);
+      gainNode.gain.linearRampToValueAtTime(finalGain, now + layer.offset + layer.fadeIn);
+    } else if (layer.fadeOut > 0) {
+      gainNode.gain.setValueAtTime(finalGain, now + layer.offset);
+      const fadeOutStart = now + layer.offset + trimmedDur - layer.fadeOut;
+      gainNode.gain.setValueAtTime(finalGain, fadeOutStart);
+      gainNode.gain.linearRampToValueAtTime(0, fadeOutStart + layer.fadeOut);
+    } else {
+      gainNode.gain.value = finalGain;
+    }
 
     // EQ filter chain
     const eqFilter = createEQFilter(ctx, layer);
@@ -1138,10 +1154,17 @@ async function startPreview() {
     panner.pan.value = layer.pan || 0;
     gainNode.connect(panner);
     panner.connect(masterGain);
-    source.start(now + layer.offset, 0);
+    source.start(now + layer.offset, layer.trimStart, trimmedDur);
 
     previewNodes.push({ source, gain: gainNode, eq: eqFilter, panner, layerId: layer.id });
+  }
 
+  // Schedule composition-level loop restart (crossfade at tail→head)
+  if (crossfadeToggle.checked && state.loopCrossfade > 0) {
+    const restartDelay = Math.max(0, (totalDur - state.loopCrossfade) * 1000);
+    state.loopTimeout = setTimeout(() => {
+      if (state.playing) scheduleCompositionRestart();
+    }, restartDelay);
   }
 
   state.playing = true;
@@ -1156,18 +1179,94 @@ async function startPreview() {
   animatePlayhead();
 }
 
+// ── Composition-level loop restart ─────────────────────
+function scheduleCompositionRestart() {
+  const ctx = getAudioCtx();
+  const now = ctx.currentTime;
+  const hasAnySolo = state.layers.some(l => l.solo);
+  const totalDur = getTotalDuration();
+
+  for (const layer of state.layers) {
+    if (layer.muted) continue;
+    if (hasAnySolo && !layer.solo) continue;
+
+    const trimmedDur = getTrimmedDuration(layer);
+    const source = ctx.createBufferSource();
+    source.buffer = layer.buffer;
+
+    const rate = Math.pow(2, layer.pitchSemitones / 12);
+    source.playbackRate.value = rate;
+
+    const gainNode = ctx.createGain();
+    const finalGain = layer.volumeActive !== false ? layer.gain : 0;
+
+    if (layer.fadeIn > 0 && layer.fadeOut > 0) {
+      gainNode.gain.setValueAtTime(0, now + layer.offset);
+      gainNode.gain.linearRampToValueAtTime(finalGain, now + layer.offset + layer.fadeIn);
+      const fadeOutStart = now + layer.offset + trimmedDur - layer.fadeOut;
+      gainNode.gain.setValueAtTime(finalGain, fadeOutStart);
+      gainNode.gain.linearRampToValueAtTime(0, fadeOutStart + layer.fadeOut);
+    } else if (layer.fadeIn > 0) {
+      gainNode.gain.setValueAtTime(0, now + layer.offset);
+      gainNode.gain.linearRampToValueAtTime(finalGain, now + layer.offset + layer.fadeIn);
+    } else if (layer.fadeOut > 0) {
+      gainNode.gain.setValueAtTime(finalGain, now + layer.offset);
+      const fadeOutStart = now + layer.offset + trimmedDur - layer.fadeOut;
+      gainNode.gain.setValueAtTime(finalGain, fadeOutStart);
+      gainNode.gain.linearRampToValueAtTime(0, fadeOutStart + layer.fadeOut);
+    } else {
+      gainNode.gain.value = finalGain;
+    }
+
+    const eqFilter = createEQFilter(ctx, layer);
+    let prevNode = source;
+    if (eqFilter) {
+      prevNode.connect(eqFilter);
+      prevNode = eqFilter;
+    }
+    prevNode.connect(gainNode);
+
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = layer.pan || 0;
+    gainNode.connect(panner);
+    panner.connect(state.masterGain);
+    source.start(now + layer.offset, layer.trimStart, trimmedDur);
+
+    previewNodes.push({ source, gain: gainNode, eq: eqFilter, panner, layerId: layer.id });
+  }
+
+  // Schedule next loop iteration
+  if (crossfadeToggle.checked && state.loopCrossfade > 0) {
+    const restartDelay = Math.max(0, (totalDur - state.loopCrossfade) * 1000);
+    state.loopTimeout = setTimeout(() => {
+      if (state.playing) scheduleCompositionRestart();
+    }, restartDelay);
+  }
+}
+
 // ── Playhead animation ──────────────────────────────────
 function animatePlayhead() {
   if (!state.playing) return;
   const elapsed = state.audioCtx.currentTime - state.previewStartTime;
   const totalDur = getTotalDuration();
+  const looping = crossfadeToggle.checked && state.loopCrossfade > 0;
+
+  // When not looping, stop animation once composition finishes
+  if (!looping && elapsed >= totalDur) {
+    stopPreview();
+    setStatus('Playback complete');
+    return;
+  }
+
+  // Wrap elapsed for looping compositions
+  const displayElapsed = looping ? elapsed % totalDur : elapsed;
+  const px = displayElapsed * state.zoom;
 
   if (masterPlayhead) {
-    const pct = Math.min((elapsed / totalDur) * 100, 100);
+    const pct = Math.min((displayElapsed / totalDur) * 100, 100);
     masterPlayhead.style.left = pct + '%';
   }
   if (timelinePlayhead) {
-    const px = elapsed * state.zoom;
     timelinePlayhead.style.left = px + 'px';
     // Auto-scroll to keep playhead visible
     const scrollLeft = timelineScroll.scrollLeft;
@@ -1175,9 +1274,13 @@ function animatePlayhead() {
     if (px < scrollLeft + 40 || px > scrollLeft + viewW - 40) {
       timelineScroll.scrollLeft = px - viewW / 2;
     }
+    // On loop wrap, scroll back to start
+    if (looping && displayElapsed < 0.1 && elapsed > totalDur) {
+      timelineScroll.scrollLeft = 0;
+    }
   }
   if (masterTime) {
-    masterTime.textContent = formatTime(elapsed) + ' / ' + formatTime(totalDur);
+    masterTime.textContent = formatTime(displayElapsed) + ' / ' + formatTime(totalDur);
   }
 
   // Draw master output spectrum
@@ -1310,6 +1413,7 @@ async function startPreviewFrom(seekTime) {
 
   const now = ctx.currentTime;
   const hasAnySolo = state.layers.some(l => l.solo);
+  const totalDur = getTotalDuration();
 
   for (const layer of state.layers) {
     if (layer.muted) continue;
@@ -1319,18 +1423,12 @@ async function startPreviewFrom(seekTime) {
     const layerEnd = layer.offset + trimmedDur;
     const source = ctx.createBufferSource();
     source.buffer = layer.buffer;
-    source.loop = true;
-
-    if (layer.trimStart > 0 || layer.trimEnd < layer.buffer.duration) {
-      source.loopStart = layer.trimStart;
-      source.loopEnd = layer.trimEnd;
-    }
 
     const rate = Math.pow(2, layer.pitchSemitones / 12);
     source.playbackRate.value = rate;
 
     const gainNode = ctx.createGain();
-    gainNode.gain.value = layer.volumeActive !== false ? layer.gain : 0;
+    const finalGain = layer.volumeActive !== false ? layer.gain : 0;
 
     // EQ filter chain
     const eqFilter = createEQFilter(ctx, layer);
@@ -1350,19 +1448,64 @@ async function startPreviewFrom(seekTime) {
     // Calculate when (relative to 'now') this layer should start
     // and what offset into its audio to begin at
     if (seekTime <= layer.offset) {
-      // Layer hasn't started yet — schedule it
+      // Layer hasn't started yet — schedule it with full fade in/out
       const delay = layer.offset - seekTime;
-      source.start(now + delay, 0);
+      if (layer.fadeIn > 0 && layer.fadeOut > 0) {
+        gainNode.gain.setValueAtTime(0, now + delay);
+        gainNode.gain.linearRampToValueAtTime(finalGain, now + delay + layer.fadeIn);
+        const fadeOutStart = now + delay + trimmedDur - layer.fadeOut;
+        gainNode.gain.setValueAtTime(finalGain, fadeOutStart);
+        gainNode.gain.linearRampToValueAtTime(0, fadeOutStart + layer.fadeOut);
+      } else if (layer.fadeIn > 0) {
+        gainNode.gain.setValueAtTime(0, now + delay);
+        gainNode.gain.linearRampToValueAtTime(finalGain, now + delay + layer.fadeIn);
+      } else if (layer.fadeOut > 0) {
+        gainNode.gain.setValueAtTime(finalGain, now + delay);
+        const fadeOutStart = now + delay + trimmedDur - layer.fadeOut;
+        gainNode.gain.setValueAtTime(finalGain, fadeOutStart);
+        gainNode.gain.linearRampToValueAtTime(0, fadeOutStart + layer.fadeOut);
+      } else {
+        gainNode.gain.value = finalGain;
+      }
+      source.start(now + delay, layer.trimStart, trimmedDur);
     } else if (seekTime < layerEnd) {
-      // Layer is mid-playback
+      // Layer is mid-playback — remaining duration only
       const localPos = seekTime - layer.offset;
-      source.start(now, layer.trimStart + localPos);
+      const remainingDur = trimmedDur - localPos;
+      // Fade in already elapsed; only apply fade out if applicable
+      if (layer.fadeOut > 0) {
+        gainNode.gain.setValueAtTime(finalGain, now);
+        const fadeOutStart = now + remainingDur - layer.fadeOut;
+        if (fadeOutStart > now) {
+          gainNode.gain.setValueAtTime(finalGain, fadeOutStart);
+          gainNode.gain.linearRampToValueAtTime(0, fadeOutStart + layer.fadeOut);
+        } else {
+          // Fade out is already partially or fully elapsed
+          const elapsedFade = layer.fadeOut - remainingDur;
+          const startGain = finalGain * (1 - Math.min(elapsedFade / layer.fadeOut, 1));
+          gainNode.gain.value = startGain;
+          gainNode.gain.linearRampToValueAtTime(0, now + remainingDur);
+        }
+      } else {
+        gainNode.gain.value = finalGain;
+      }
+      source.start(now, layer.trimStart + localPos, remainingDur);
     } else {
       // Layer already finished — skip
       continue;
     }
 
     previewNodes.push({ source, gain: gainNode, eq: eqFilter, panner, layerId: layer.id });
+  }
+
+  // Schedule composition-level loop restart
+  if (crossfadeToggle.checked && state.loopCrossfade > 0) {
+    // Restart after the remaining composition time from seek
+    const remainingTotal = totalDur - seekTime;
+    const restartDelay = Math.max(0, (remainingTotal - state.loopCrossfade) * 1000);
+    state.loopTimeout = setTimeout(() => {
+      if (state.playing) scheduleCompositionRestart();
+    }, restartDelay);
   }
 
   state.playing = true;
