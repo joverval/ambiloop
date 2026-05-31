@@ -22,7 +22,7 @@ body {
   font-family: var(--font);
   background: var(--bg);
   color: var(--text);
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -69,10 +69,7 @@ body.drag-over {
 
 /* Main layout */
 main {
-  display: grid;
-  grid-template-columns: 340px 1fr;
-  grid-template-rows: 1fr;
-  gap: 0;
+  display: flex;
   flex: 1;
   overflow: hidden;
   min-height: 0;
@@ -105,6 +102,8 @@ main {
 
 /* Layers panel */
 .layers-panel {
+  width: 340px;
+  flex-shrink: 0;
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -228,6 +227,7 @@ input[type="range"]::-webkit-slider-thumb:hover {
 
 /* Timeline */
 .timeline {
+  flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
