@@ -544,11 +544,8 @@ footer {
   cursor: pointer;
 }
 
-/* Bottom bar (sticky: master + footer) */
+/* Bottom bar (master + footer) */
 .bottom-bar {
-  position: sticky;
-  bottom: 0;
-  z-index: 100;
   flex-shrink: 0;
 }
 
