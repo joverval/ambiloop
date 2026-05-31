@@ -89,6 +89,7 @@ async function loadFiles(files) {
         name: file.name,
         buffer: audioBuf,
         gain: 0.8,
+        volumeActive: true,
         pitchSemitones: 0,
         color: LAYER_COLORS[(state.layers.length) % LAYER_COLORS.length],
         muted: false,
@@ -174,6 +175,9 @@ function renderLayers() {
                  data-action="gain" data-id="${l.id}" class="slider">
           <input type="number" value="${Math.round(l.gain * 100)}" min="0" max="100"
                  data-action="gain" data-id="${l.id}" class="layer-value num-input">
+          <label class="vol-active-label" title="Enable/disable layer output">
+            <input type="checkbox" data-action="volumeActive" data-id="${l.id}" ${l.volumeActive !== false ? 'checked' : ''}>
+          </label>
         </div>
 
         <div class="layer-control">
@@ -649,7 +653,7 @@ layerList.addEventListener('input', (e) => {
       if (action === 'pitch') {
         node.source.playbackRate.value = Math.pow(2, parseFloat(val) / 12);
       } else if (action === 'gain') {
-        node.gain.gain.value = val / 100;
+        node.gain.gain.value = layer.volumeActive !== false ? val / 100 : 0;
       } else if (action === 'pan') {
         node.panner.pan.value = parseInt(val) / 100;
       } else if (action === 'eqFreq' && node.eq) {
@@ -693,6 +697,18 @@ layerList.addEventListener('click', (e) => {
     if (state.playing) stopPreview();
   } else if (action === 'duplicate') {
     duplicateLayer(id);
+  } else if (action === 'volumeActive') {
+    const layer = state.layers.find(l => l.id === id);
+    if (layer) {
+      layer.volumeActive = e.target.checked;
+      // If playing, live-update the gain node
+      if (state.playing) {
+        const node = previewNodes.find(n => n.layerId === id);
+        if (node) {
+          node.gain.gain.value = e.target.checked ? layer.gain : 0;
+        }
+      }
+    }
   } else if (action === 'eqEnabled') {
     const layer = state.layers.find(l => l.id === id);
     if (layer) {
@@ -961,7 +977,7 @@ async function startPreview() {
     source.playbackRate.value = rate;
 
     const gainNode = ctx.createGain();
-    gainNode.gain.value = layer.gain;
+    gainNode.gain.value = layer.volumeActive !== false ? layer.gain : 0;
 
     // EQ filter chain
     const eqFilter = createEQFilter(ctx, layer);
@@ -1150,7 +1166,7 @@ async function startPreviewFrom(seekTime) {
     source.playbackRate.value = rate;
 
     const gainNode = ctx.createGain();
-    gainNode.gain.value = layer.gain;
+    gainNode.gain.value = layer.volumeActive !== false ? layer.gain : 0;
 
     // EQ filter chain
     const eqFilter = createEQFilter(ctx, layer);

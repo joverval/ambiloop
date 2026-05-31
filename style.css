@@ -405,6 +405,20 @@ input[type="range"]::-webkit-slider-thumb:hover {
   cursor: pointer;
   user-select: none;
 }
+
+/* Volume active toggle (next to vol number input) */
+.vol-active-label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  margin-left: 2px;
+}
+.vol-active-label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
 .eq-enable-label input[type="checkbox"] {
   accent-color: var(--accent);
   cursor: pointer;
