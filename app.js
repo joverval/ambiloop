@@ -192,27 +192,76 @@ function renderTimeline() {
   timelineRuler.innerHTML = rulerHTML;
   timelineRuler.style.width = totalWidth + 'px';
 
-  // Tracks with blocks
+  // Tracks with waveform canvases
   timelineTracks.innerHTML = state.layers.map(l => {
     const trimmedDur = getTrimmedDuration(l);
     const left = l.offset * state.zoom;
     const width = Math.max(trimmedDur * state.zoom, 4); // min 4px
-    const leftPct = (l.offset / l.buffer.duration * 100).toFixed(0);
-    const widthPct = (trimmedDur / l.buffer.duration * 100).toFixed(0);
 
     return `
     <div class="timeline-track">
-      <div class="timeline-block" data-id="${l.id}"
-           style="left:${left}px; width:${width}px; background:${l.color}"
+      <canvas class="timeline-block" data-id="${l.id}"
+           width="${width}" height="28"
+           style="left:${left}px; width:${width}px;"
            title="${l.name} (offset: ${l.offset.toFixed(1)}s, trim: ${l.trimStart.toFixed(1)}→${l.trimEnd.toFixed(1)}s)">
-        <span class="block-label">${l.name}</span>
-        <span class="block-range">${leftPct}%–${widthPct}%</span>
-      </div>
+      </canvas>
+      <span class="block-label" style="left:${left + 4}px">${l.name}</span>
     </div>
     `;
   }).join('');
 
   timelineTracks.style.width = totalWidth + 'px';
+
+  // Draw waveforms after DOM settles
+  requestAnimationFrame(() => {
+    state.layers.forEach(l => {
+      const canvas = timelineTracks.querySelector(`canvas[data-id="${l.id}"]`);
+      if (canvas) drawWaveform(canvas, l);
+    });
+  });
+}
+
+// ── Waveform drawing ────────────────────────────────────
+function drawWaveform(canvas, layer) {
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+
+  ctx.clearRect(0, 0, w, h);
+
+  // Subtle background fill at low opacity
+  ctx.fillStyle = layer.color + '18';
+  ctx.fillRect(0, 0, w, h);
+
+  const sr = layer.buffer.sampleRate;
+  const trimStartSample = Math.floor(layer.trimStart * sr);
+  const trimEndSample = Math.floor(Math.min(layer.trimEnd, layer.buffer.duration) * sr);
+  const data = layer.buffer.getChannelData(0).subarray(trimStartSample, trimEndSample);
+  const len = data.length;
+
+  if (len < 1) return;
+
+  const mid = h / 2;
+  const maxAmp = mid - 1;
+
+  ctx.strokeStyle = layer.color;
+  ctx.lineWidth = 1;
+
+  for (let px = 0; px < w; px++) {
+    const bucketStart = Math.floor((px / w) * len);
+    const bucketEnd = Math.floor(((px + 1) / w) * len);
+    let peak = 0;
+    for (let i = bucketStart; i < bucketEnd; i++) {
+      const abs = Math.abs(data[i]);
+      if (abs > peak) peak = abs;
+    }
+
+    const drawHeight = peak * maxAmp;
+    ctx.beginPath();
+    ctx.moveTo(px + 0.5, mid - drawHeight);
+    ctx.lineTo(px + 0.5, mid + drawHeight);
+    ctx.stroke();
+  }
 }
 
 function formatTime(sec) {

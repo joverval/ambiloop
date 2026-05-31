@@ -297,14 +297,10 @@ input[type="range"]::-webkit-slider-thumb {
   height: 28px;
   border-radius: 4px;
   cursor: grab;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 8px;
-  overflow: hidden;
   user-select: none;
   transition: box-shadow 0.15s;
   min-width: 12px;
+  /* Canvas gets no background — drawn programmatically */
 }
 .timeline-block:hover {
   box-shadow: 0 0 0 2px rgba(255,255,255,0.15);
@@ -316,13 +312,17 @@ input[type="range"]::-webkit-slider-thumb {
   opacity: 0.9;
 }
 .block-label {
-  font-size: 0.7rem;
-  color: white;
+  position: absolute;
+  top: 4px;
+  font-size: 0.68rem;
+  color: rgba(255,255,255,0.75);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  pointer-events: none;
+  max-width: calc(100% - 8px);
+  z-index: 2;
+  text-shadow: 0 0 3px rgba(0,0,0,0.7);
 }
 .block-range {
   font-family: var(--mono);
