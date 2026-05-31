@@ -368,7 +368,42 @@ input[type="range"]::-webkit-slider-thumb:hover {
   flex: 1;
 }
 
-/* Crossfade option */
+/* EQ Section */
+.eq-toggle-row {
+  display: flex;
+  align-items: center;
+  margin-top: 2px;
+}
+.eq-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.eq-toggle:hover { color: var(--accent); border-color: var(--accent-dim); }
+.eq-toggle.active { color: var(--accent); border-color: var(--accent-dim); }
+
+.eq-section { margin-top: 6px; }
+.eq-section.hidden { display: none; }
+
+.eq-select {
+  flex: 1;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.75rem;
+  padding: 4px 6px;
+  cursor: pointer;
+  font-family: var(--font);
+}
+.eq-select:focus { border-color: var(--accent-dim); outline: none; }
+
+.eq-gain-row.hidden { display: none; }
 .crossfade-option {
   display: flex;
   align-items: center;

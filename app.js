@@ -93,7 +93,12 @@ async function loadFiles(files) {
         muted: false,
         trimStart: 0,
         trimEnd: audioBuf.duration,
-        offset: 0
+        offset: 0,
+        eqEnabled: false,
+        eqType: 'peaking',
+        eqFreq: 1000,
+        eqQ: 1.0,
+        eqGain: 0
       };
 
       state.layers.push(layer);
@@ -164,6 +169,41 @@ function renderLayers() {
             <input type="number" value="${l.trimEnd.toFixed(1)}" step="0.1" min="0" max="${dur.toFixed(1)}"
                    data-action="trimEnd" data-id="${l.id}" class="num-input">
             <span class="layer-value">s</span>
+          </div>
+        </div>
+
+        <!-- EQ Section -->
+        <div class="eq-toggle-row">
+          <button class="eq-toggle ${l.eqEnabled ? 'active' : ''}" data-action="eqToggle" data-id="${l.id}">
+            EQ ${l.eqEnabled ? '▼' : '▶'}
+          </button>
+        </div>
+        <div class="eq-section ${l.eqEnabled ? '' : 'hidden'}">
+          <div class="layer-control">
+            <span class="layer-label">Type</span>
+            <select data-action="eqType" data-id="${l.id}" class="eq-select">
+              ${['lowpass','highpass','bandpass','notch','peaking','lowshelf','highshelf'].map(t =>
+                `<option value="${t}" ${l.eqType === t ? 'selected' : ''}>${t}</option>`
+              ).join('')}
+            </select>
+          </div>
+          <div class="layer-control">
+            <span class="layer-label">Freq</span>
+            <input type="range" min="20" max="20000" value="${l.eqFreq}" step="1"
+                   data-action="eqFreq" data-id="${l.id}" class="slider">
+            <span class="layer-value">${l.eqFreq < 1000 ? l.eqFreq + ' Hz' : (l.eqFreq/1000).toFixed(1) + ' kHz'}</span>
+          </div>
+          <div class="layer-control">
+            <span class="layer-label">Q</span>
+            <input type="range" min="0.1" max="10" value="${l.eqQ}" step="0.1"
+                   data-action="eqQ" data-id="${l.id}" class="slider">
+            <span class="layer-value">${l.eqQ.toFixed(1)}</span>
+          </div>
+          <div class="layer-control eq-gain-row ${l.eqType === 'lowpass' || l.eqType === 'highpass' || l.eqType === 'bandpass' || l.eqType === 'notch' ? 'hidden' : ''}">
+            <span class="layer-label">Gain</span>
+            <input type="range" min="-20" max="20" value="${l.eqGain}" step="0.5"
+                   data-action="eqGain" data-id="${l.id}" class="slider">
+            <span class="layer-value">${l.eqGain > 0 ? '+' : ''}${l.eqGain.toFixed(1)} dB</span>
           </div>
         </div>
       </div>
@@ -289,9 +329,29 @@ layerList.addEventListener('input', (e) => {
   } else if (action === 'trimEnd') {
     const val = parseFloat(e.target.value) || layer.buffer.duration;
     layer.trimEnd = Math.max(0, Math.min(val, layer.buffer.duration));
+  } else if (action === 'eqFreq') {
+    layer.eqFreq = parseInt(e.target.value);
+  } else if (action === 'eqQ') {
+    layer.eqQ = parseFloat(e.target.value);
+  } else if (action === 'eqGain') {
+    layer.eqGain = parseFloat(e.target.value);
+  } else if (action === 'eqType') {
+    layer.eqType = e.target.value;
   }
 
   renderAll();
+});
+
+// 'change' for select elements
+layerList.addEventListener('change', (e) => {
+  if (e.target.dataset.action === 'eqType') {
+    const id = parseInt(e.target.dataset.id);
+    const layer = state.layers.find(l => l.id === id);
+    if (layer) {
+      layer.eqType = e.target.value;
+      renderAll();
+    }
+  }
 });
 
 layerList.addEventListener('click', (e) => {
@@ -304,6 +364,9 @@ layerList.addEventListener('click', (e) => {
     if (state.playing) stopPreview();
   } else if (action === 'duplicate') {
     duplicateLayer(id);
+  } else if (action === 'eqToggle') {
+    layer.eqEnabled = !layer.eqEnabled;
+    renderAll();
   }
 });
 
@@ -412,7 +475,12 @@ function splitLayerAt(layer, block, clickEvent) {
     muted: false,
     trimStart: cutPoint,
     trimEnd: layer.trimEnd,
-    offset: layer.offset + (cutPoint - layer.trimStart)
+    offset: layer.offset + (cutPoint - layer.trimStart),
+    eqEnabled: layer.eqEnabled,
+    eqType: layer.eqType,
+    eqFreq: layer.eqFreq,
+    eqQ: layer.eqQ,
+    eqGain: layer.eqGain
   };
 
   // Current layer gets trimmed at the cut point
@@ -441,7 +509,12 @@ function duplicateLayer(id) {
     muted: layer.muted,
     trimStart: layer.trimStart,
     trimEnd: layer.trimEnd,
-    offset: layer.offset
+    offset: layer.offset,
+    eqEnabled: layer.eqEnabled,
+    eqType: layer.eqType,
+    eqFreq: layer.eqFreq,
+    eqQ: layer.eqQ,
+    eqGain: layer.eqGain
   };
 
   const idx = state.layers.indexOf(layer);
@@ -453,6 +526,19 @@ function duplicateLayer(id) {
 
 // ── Preview playback ───────────────────────────────────
 let previewNodes = [];
+
+function createEQFilter(ctx, layer) {
+  if (!layer.eqEnabled) return null;
+  const filter = ctx.createBiquadFilter();
+  filter.type = layer.eqType;
+  filter.frequency.value = layer.eqFreq;
+  filter.Q.value = layer.eqQ;
+  // Gain only applies to peaking, lowshelf, highshelf
+  if (['peaking','lowshelf','highshelf'].includes(layer.eqType)) {
+    filter.gain.value = layer.eqGain;
+  }
+  return filter;
+}
 
 function stopPreview() {
   previewNodes.forEach(n => {
@@ -498,11 +584,18 @@ async function startPreview() {
     const gainNode = ctx.createGain();
     gainNode.gain.value = layer.gain;
 
-    source.connect(gainNode);
+    // EQ filter chain
+    const eqFilter = createEQFilter(ctx, layer);
+    if (eqFilter) {
+      source.connect(eqFilter);
+      eqFilter.connect(gainNode);
+    } else {
+      source.connect(gainNode);
+    }
     gainNode.connect(masterGain);
     source.start(now + layer.offset, 0);
 
-    previewNodes.push({ source, gain: gainNode });
+    previewNodes.push({ source, gain: gainNode, eq: eqFilter });
   }
 
   state.playing = true;
@@ -610,7 +703,14 @@ async function startPreviewFrom(seekTime) {
     const gainNode = ctx.createGain();
     gainNode.gain.value = layer.gain;
 
-    source.connect(gainNode);
+    // EQ filter chain
+    const eqFilter = createEQFilter(ctx, layer);
+    if (eqFilter) {
+      source.connect(eqFilter);
+      eqFilter.connect(gainNode);
+    } else {
+      source.connect(gainNode);
+    }
     gainNode.connect(masterGain);
 
     // Calculate when (relative to 'now') this layer should start
@@ -628,7 +728,7 @@ async function startPreviewFrom(seekTime) {
       continue;
     }
 
-    previewNodes.push({ source, gain: gainNode });
+    previewNodes.push({ source, gain: gainNode, eq: eqFilter });
   }
 
   state.playing = true;
@@ -824,7 +924,29 @@ async function exportWAV() {
 
       // Apply true pitch shift
       const shifted = await pitchShiftBuffer(trimBuf, layer.pitchSemitones);
-      const shiftedData = shifted.getChannelData(0);
+
+      // Apply EQ if enabled
+      let eqBuffer = shifted;
+      if (layer.eqEnabled) {
+        const eqCtx = new OfflineAudioContext(shifted.numberOfChannels, shifted.length, sr);
+        const eqSource = eqCtx.createBufferSource();
+        eqSource.buffer = shifted;
+
+        const eqFilter = eqCtx.createBiquadFilter();
+        eqFilter.type = layer.eqType;
+        eqFilter.frequency.value = layer.eqFreq;
+        eqFilter.Q.value = layer.eqQ;
+        if (['peaking','lowshelf','highshelf'].includes(layer.eqType)) {
+          eqFilter.gain.value = layer.eqGain;
+        }
+
+        eqSource.connect(eqFilter);
+        eqFilter.connect(eqCtx.destination);
+        eqSource.start(0);
+        eqBuffer = await eqCtx.startRendering();
+      }
+
+      const shiftedData = eqBuffer.getChannelData(0);
       const gain = layer.gain;
 
       // Place at offset
