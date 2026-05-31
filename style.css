@@ -199,26 +199,21 @@ main {
 .layer-remove:hover { color: var(--accent); background: rgba(233,69,96,0.1); }
 
 .layer-control {
-  margin-bottom: 8px;
-}
-.layer-control:last-child { margin-bottom: 0; }
-
-.layer-label {
   display: flex;
-  justify-content: space-between;
-  font-size: 0.72rem;
-  color: var(--text-dim);
-  margin-bottom: 3px;
+  align-items: center;
+  gap: 6px;
 }
-.layer-label .value {
-  font-family: var(--mono);
-  color: var(--text);
+.layer-label {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  min-width: 32px;
+  flex-shrink: 0;
 }
 
 /* Range inputs */
 input[type="range"] {
   -webkit-appearance: none;
-  width: 100%;
+  flex: 1;
   height: 4px;
   background: var(--slider-track);
   border-radius: 2px;
@@ -240,44 +235,164 @@ input[type="range"]::-webkit-slider-thumb {
   flex-direction: column;
   overflow: hidden;
 }
-.timeline-content {
+.timeline-scroll {
   flex: 1;
-  overflow-y: auto;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  overflow: auto;
+  position: relative;
 }
-.timeline-content::-webkit-scrollbar { width: 6px; }
-.timeline-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.timeline-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.timeline-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-.timeline-row {
+.timeline-ruler {
+  height: 24px;
+  position: relative;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  min-width: 100%;
+}
+.ruler-tick {
+  position: absolute;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  top: 4px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.ruler-tick::before {
+  content: '';
+  display: block;
+  width: 1px;
+  height: 8px;
+  background: var(--border);
+  margin: 0 auto 2px;
+}
+
+.timeline-tracks {
+  position: relative;
+  min-width: 100%;
+  padding: 4px 0;
+}
+.timeline-track {
+  height: 36px;
+  position: relative;
+  margin: 2px 0;
+}
+.timeline-block {
+  position: absolute;
+  top: 4px;
+  height: 28px;
+  border-radius: 4px;
+  cursor: grab;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  background: var(--bg-panel);
-  border-radius: 4px;
-  font-size: 0.78rem;
-  min-height: 32px;
+  justify-content: space-between;
+  padding: 0 8px;
+  overflow: hidden;
+  user-select: none;
+  transition: box-shadow 0.15s;
+  min-width: 12px;
 }
-.timeline-row .row-color {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-  flex-shrink: 0;
+.timeline-block:hover {
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.15);
 }
-.timeline-row .row-name {
-  flex: 1;
+.timeline-block.dragging {
+  cursor: grabbing;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.3);
+  z-index: 10;
+  opacity: 0.9;
+}
+.block-label {
+  font-size: 0.7rem;
+  color: white;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
 }
-.timeline-row .row-info {
+.block-range {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  color: rgba(255,255,255,0.7);
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+
+/* Layer card additions */
+.layer-dur {
   font-family: var(--mono);
   font-size: 0.7rem;
   color: var(--text-dim);
+  margin-right: 6px;
   flex-shrink: 0;
+}
+.layer-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.trim-offset-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.trim-offset-row .layer-control {
+  flex: 1;
+  min-width: 80px;
+}
+.layer-value {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+/* Number inputs */
+.num-input {
+  width: 100%;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 3px 6px;
+  outline: none;
+}
+.num-input:focus {
+  border-color: var(--accent-dim);
+}
+.slider {
+  flex: 1;
+}
+
+/* Crossfade option */
+.crossfade-option {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.crossfade-option input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+.crossfade-option input[type="number"] {
+  width: 50px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 2px 4px;
+  text-align: center;
+}
+.crossfade-option input[type="number"]:disabled {
+  opacity: 0.3;
 }
 
 /* Footer / Transport */
