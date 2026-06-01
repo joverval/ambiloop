@@ -687,6 +687,9 @@ function applyLayerValue(layer, action, value) {
     layer.gain = value / 100;
   } else if (action === 'pitch') {
     layer.pitchSemitones = parseFloat(value);
+    // Invalidate stretched buffer cache — next playback will recompute
+    layer._stretchedPitchKey = undefined;
+    layer._stretchedBuffer = null;
   } else if (action === 'pan') {
     layer.pan = parseInt(value) / 100;
   } else if (action === 'offset') {
@@ -728,9 +731,7 @@ layerList.addEventListener('input', (e) => {
     if (node) {
       const action = e.target.dataset.action;
       const val = e.target.value;
-      if (action === 'pitch') {
-        node.source.playbackRate.value = Math.pow(2, parseFloat(val) / 12);
-      } else if (action === 'gain') {
+      if (action === 'gain') {
         node.gain.gain.value = layer.volumeActive !== false ? val / 100 : 0;
       } else if (action === 'pan') {
         node.panner.pan.value = parseInt(val) / 100;
@@ -855,7 +856,10 @@ layerList.addEventListener('click', (e) => {
       renderAll();
     }
   } else {
-    // Click on layer card (non-button area) → select/deselect
+    // Click on layer card (non-form area) → select/deselect
+    // Guard: don't select when clicking on form controls (inputs, buttons, selects)
+    const tag = e.target.tagName;
+    if (tag === 'INPUT' || tag === 'BUTTON' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'LABEL') return;
     const card = e.target.closest('.layer-card');
     if (card) {
       const cardId = parseInt(card.dataset.id);
@@ -1113,9 +1117,9 @@ async function startPreview() {
 
     const trimmedDur = getTrimmedDuration(layer);
     const source = ctx.createBufferSource();
-    source.buffer = layer.buffer;
-
     const rate = Math.pow(2, layer.pitchSemitones / 12);
+    // Use stretched buffer so pitch shifts without changing duration
+    source.buffer = buildStretchedBuffer(layer, ctx);
     source.playbackRate.value = rate;
 
     const gainNode = ctx.createGain();
@@ -1154,7 +1158,9 @@ async function startPreview() {
     panner.pan.value = layer.pan || 0;
     gainNode.connect(panner);
     panner.connect(masterGain);
-    source.start(now + layer.offset, layer.trimStart, trimmedDur);
+    // Trim params scaled for stretched buffer: offset and duration
+    // are in buffer-seconds, and the stretched buffer is rate× longer
+    source.start(now + layer.offset, layer.trimStart * rate, trimmedDur * rate);
 
     previewNodes.push({ source, gain: gainNode, eq: eqFilter, panner, layerId: layer.id });
   }
@@ -1192,9 +1198,9 @@ function scheduleCompositionRestart() {
 
     const trimmedDur = getTrimmedDuration(layer);
     const source = ctx.createBufferSource();
-    source.buffer = layer.buffer;
-
     const rate = Math.pow(2, layer.pitchSemitones / 12);
+    // Use stretched buffer so pitch shifts without changing duration
+    source.buffer = buildStretchedBuffer(layer, ctx);
     source.playbackRate.value = rate;
 
     const gainNode = ctx.createGain();
@@ -1230,7 +1236,7 @@ function scheduleCompositionRestart() {
     panner.pan.value = layer.pan || 0;
     gainNode.connect(panner);
     panner.connect(state.masterGain);
-    source.start(now + layer.offset, layer.trimStart, trimmedDur);
+    source.start(now + layer.offset, layer.trimStart * rate, trimmedDur * rate);
 
     previewNodes.push({ source, gain: gainNode, eq: eqFilter, panner, layerId: layer.id });
   }
@@ -1422,9 +1428,9 @@ async function startPreviewFrom(seekTime) {
     const trimmedDur = getTrimmedDuration(layer);
     const layerEnd = layer.offset + trimmedDur;
     const source = ctx.createBufferSource();
-    source.buffer = layer.buffer;
-
     const rate = Math.pow(2, layer.pitchSemitones / 12);
+    // Use stretched buffer so pitch shifts without changing duration
+    source.buffer = buildStretchedBuffer(layer, ctx);
     source.playbackRate.value = rate;
 
     const gainNode = ctx.createGain();
@@ -1467,7 +1473,7 @@ async function startPreviewFrom(seekTime) {
       } else {
         gainNode.gain.value = finalGain;
       }
-      source.start(now + delay, layer.trimStart, trimmedDur);
+      source.start(now + delay, layer.trimStart * rate, trimmedDur * rate);
     } else if (seekTime < layerEnd) {
       // Layer is mid-playback — remaining duration only
       const localPos = seekTime - layer.offset;
@@ -1489,7 +1495,8 @@ async function startPreviewFrom(seekTime) {
       } else {
         gainNode.gain.value = finalGain;
       }
-      source.start(now, layer.trimStart + localPos, remainingDur);
+      // Trim params scaled for stretched buffer
+      source.start(now, (layer.trimStart + localPos) * rate, remainingDur * rate);
     } else {
       // Layer already finished — skip
       continue;
@@ -1573,6 +1580,36 @@ function olaTimeStretch(input, factor) {
   }
 
   return output;
+}
+
+// ── Build OLA-stretched AudioBuffer for pitch-preserving preview ──
+// Returns a buffer rate× longer (same pitch via OLA) so that when played
+// back at playbackRate=rate, the pitch shifts while duration stays correct.
+function buildStretchedBuffer(layer, ctx) {
+  const rate = Math.pow(2, layer.pitchSemitones / 12);
+  if (Math.abs(rate - 1) < 0.001) return layer.buffer;
+
+  // Return cached if still valid
+  if (layer._stretchedPitchKey === layer.pitchSemitones && layer._stretchedBuffer) {
+    return layer._stretchedBuffer;
+  }
+
+  const channels = layer.buffer.numberOfChannels;
+  const origLen = layer.buffer.length;
+  const stretchedLen = Math.max(1, Math.floor(origLen * rate));
+
+  const stretchedBuf = ctx.createBuffer(channels, stretchedLen, ctx.sampleRate);
+  for (let ch = 0; ch < channels; ch++) {
+    const input = layer.buffer.getChannelData(ch);
+    const stretched = olaTimeStretch(input, rate);
+    const padded = new Float32Array(stretchedLen);
+    padded.set(stretched.subarray(0, Math.min(stretched.length, stretchedLen)));
+    stretchedBuf.copyToChannel(padded, ch, 0);
+  }
+
+  layer._stretchedPitchKey = layer.pitchSemitones;
+  layer._stretchedBuffer = stretchedBuf;
+  return stretchedBuf;
 }
 
 // ── True pitch shift: OLA stretch + playbackRate ────────
