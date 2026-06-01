@@ -1532,58 +1532,173 @@ playBtn.addEventListener('click', () => {
 });
 stopBtn.addEventListener('click', stopPreview);
 
-// ── OLA Time Stretch (preserves pitch, changes duration) ──
-function olaTimeStretch(input, factor) {
+// ── FFT (Cooley-Tukey radix-2, in-place) ─────────────────
+// re and im are Float32Arrays of length N (power of 2)
+function fft(re, im) {
+  const N = re.length;
+  // Bit reversal
+  for (let i = 1, j = 0; i < N; i++) {
+    let bit = N >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      [re[i], re[j]] = [re[j], re[i]];
+      [im[i], im[j]] = [im[j], im[i]];
+    }
+  }
+  // Cooley-Tukey
+  for (let len = 2; len <= N; len <<= 1) {
+    const half = len >> 1;
+    const angle = -2 * Math.PI / len;
+    for (let i = 0; i < N; i += len) {
+      for (let j = 0; j < half; j++) {
+        const wr = Math.cos(angle * j);
+        const wi = Math.sin(angle * j);
+        const tr = re[i + j + half] * wr - im[i + j + half] * wi;
+        const ti = re[i + j + half] * wi + im[i + j + half] * wr;
+        re[i + j + half] = re[i + j] - tr;
+        im[i + j + half] = im[i + j] - ti;
+        re[i + j] += tr;
+        im[i + j] += ti;
+      }
+    }
+  }
+}
+
+function ifft(re, im) {
+  // Conjugate → FFT → conjugate → scale
+  const N = re.length;
+  for (let i = 0; i < N; i++) im[i] = -im[i];
+  fft(re, im);
+  for (let i = 0; i < N; i++) {
+    re[i] /= N;
+    im[i] = -im[i] / N;
+  }
+}
+
+// Phase unwrapping helper — returns delta wrapped to [-PI, PI]
+function wrapPhase(delta) {
+  return ((delta + Math.PI) % (2 * Math.PI + 1e-9)) - Math.PI;
+}
+
+// ── Phase Vocoder Time Stretch ──────────────────────────
+function phaseVocoderStretch(input, factor) {
   const inLen = input.length;
   const outLen = Math.floor(inLen * factor);
   if (outLen < 1 || inLen < 1) return new Float32Array(0);
 
-  const output = new Float32Array(outLen);
-  const norm = new Float32Array(outLen);
-
-  const frameSize = Math.min(4096, Math.floor(inLen / 4));
-  if (frameSize < 64) {
+  // Fallback to sample-and-hold for very short inputs
+  if (inLen < 1024) {
+    const out = new Float32Array(outLen);
     for (let i = 0; i < outLen; i++) {
-      const srcIdx = Math.floor(i / factor);
-      output[i] = input[Math.min(srcIdx, inLen - 1)];
+      out[i] = input[Math.min(Math.floor(i / factor), inLen - 1)];
     }
-    return output;
+    return out;
   }
 
-  const hopSize = Math.max(1, Math.floor(frameSize / 8));
+  // Pick nearest power-of-2 FFT size
+  let fftSize = 1024;
+  while (fftSize * 2 <= Math.min(inLen, 8192)) fftSize <<= 1;
+  const hopA = fftSize >> 2; // analysis hop = 75% overlap
+  const hopS = Math.max(1, Math.round(hopA * factor)); // synthesis hop
 
-  // Hann window
-  const window = new Float32Array(frameSize);
-  for (let i = 0; i < frameSize; i++) {
-    window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (frameSize - 1)));
+  // Hann analysis + synthesis windows
+  const win = new Float32Array(fftSize);
+  const synWin = new Float32Array(fftSize);
+  for (let i = 0; i < fftSize; i++) {
+    win[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1)));
+    synWin[i] = win[i];
   }
 
-  let outPos = 0;
-  while (outPos + frameSize <= outLen) {
-    const inPos = Math.floor(outPos / factor);
+  // Normalize synthesis window for constant overlap-add
+  // For 75% overlap with Hann, the OLA sum is 1.5 — divide by that
+  const olaGain = (fftSize / hopA) * 0.5;
+  for (let i = 0; i < fftSize; i++) {
+    synWin[i] /= olaGain;
+  }
 
-    if (inPos + frameSize <= inLen) {
-      for (let i = 0; i < frameSize; i++) {
-        const w = window[i];
-        output[outPos + i] += input[inPos + i] * w;
-        norm[outPos + i] += w;
-      }
+  const halfN = fftSize >> 1;
+  const output = new Float32Array(outLen);
+
+  // Phase accumulators per bin (unwrap across frames)
+  const phaseAcc = new Float32Array(halfN + 1);
+
+  // Per-bin frequency offset from bin center
+  const binFreq = 2 * Math.PI / fftSize; // radians per sample per bin
+
+  const numFrames = Math.floor((inLen - fftSize) / hopA) + 1;
+
+  for (let f = 0; f < numFrames; f++) {
+    const inPos = f * hopA;
+
+    // Extract windowed frame
+    const re = new Float32Array(fftSize);
+    const im = new Float32Array(fftSize);
+    for (let i = 0; i < fftSize; i++) {
+      re[i] = (inPos + i < inLen ? input[inPos + i] : 0) * win[i];
     }
-    outPos += hopSize;
-  }
 
-  // Normalize
-  for (let i = 0; i < outLen; i++) {
-    if (norm[i] > 1e-6) {
-      output[i] /= norm[i];
+    // Forward FFT
+    fft(re, im);
+
+    // Magnitude + phase for positive frequencies
+    const mag = new Float32Array(halfN + 1);
+    const phase = new Float32Array(halfN + 1);
+    for (let k = 0; k <= halfN; k++) {
+      mag[k] = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
+      phase[k] = Math.atan2(im[k], re[k]);
+    }
+
+    // Phase propagation: estimate true frequency, scale for stretch
+    for (let k = 0; k <= halfN; k++) {
+      const expectedAdvance = binFreq * k * hopA;
+      let deltaPhi = phase[k] - phaseAcc[k] - expectedAdvance;
+      deltaPhi = wrapPhase(deltaPhi);
+
+      // True instantaneous frequency (radians per sample)
+      const trueFreq = binFreq * k + deltaPhi / hopA;
+
+      // For time-stretch: frequencies get SCALED by 1/factor
+      // (stretching time → compressing frequencies keeps pitch)
+      const shiftedFreq = trueFreq / factor;
+
+      // Phase advance for synthesis hop
+      const synAdvance = shiftedFreq * hopS;
+
+      phaseAcc[k] += synAdvance;
+      // phaseAcc accumulates freely — no wrapping, IFFT handles it
+    }
+
+    // Reconstruct complex spectrum
+    for (let k = 0; k <= halfN; k++) {
+      re[k] = mag[k] * Math.cos(phaseAcc[k]);
+      im[k] = mag[k] * Math.sin(phaseAcc[k]);
+    }
+    // Mirror for negative frequencies (hermitian symmetry)
+    for (let k = 1; k < halfN; k++) {
+      const nk = fftSize - k;
+      re[nk] = re[k];
+      im[nk] = -im[k];
+    }
+    if (fftSize > 1) {
+      im[halfN] = 0; // Nyquist is real
+    }
+
+    // Inverse FFT
+    ifft(re, im);
+
+    // Overlap-add with synthesis window
+    const outPos = f * hopS;
+    for (let i = 0; i < fftSize && outPos + i < outLen; i++) {
+      output[outPos + i] += re[i] * synWin[i];
     }
   }
 
   return output;
 }
 
-// ── Build OLA-stretched AudioBuffer for pitch-preserving preview ──
-// Returns a buffer rate× longer (same pitch via OLA) so that when played
+// ── Build phase-vocoder-stretched AudioBuffer for pitch-preserving preview ──
+// Returns a buffer rate× longer (same pitch via phase vocoder) so that when played
 // back at playbackRate=rate, the pitch shifts while duration stays correct.
 function buildStretchedBuffer(layer, ctx) {
   const rate = Math.pow(2, layer.pitchSemitones / 12);
@@ -1601,7 +1716,7 @@ function buildStretchedBuffer(layer, ctx) {
   const stretchedBuf = ctx.createBuffer(channels, stretchedLen, ctx.sampleRate);
   for (let ch = 0; ch < channels; ch++) {
     const input = layer.buffer.getChannelData(ch);
-    const stretched = olaTimeStretch(input, rate);
+    const stretched = phaseVocoderStretch(input, rate);
     const padded = new Float32Array(stretchedLen);
     padded.set(stretched.subarray(0, Math.min(stretched.length, stretchedLen)));
     stretchedBuf.copyToChannel(padded, ch, 0);
@@ -1612,7 +1727,7 @@ function buildStretchedBuffer(layer, ctx) {
   return stretchedBuf;
 }
 
-// ── True pitch shift: OLA stretch + playbackRate ────────
+// ── True pitch shift: phase vocoder stretch + playbackRate ────────
 async function pitchShiftBuffer(buffer, semitones) {
   if (Math.abs(semitones) < 0.01) return buffer;
 
@@ -1628,7 +1743,7 @@ async function pitchShiftBuffer(buffer, semitones) {
 
   for (let ch = 0; ch < channels; ch++) {
     const input = buffer.getChannelData(ch);
-    const stretched = olaTimeStretch(input, rate);
+    const stretched = phaseVocoderStretch(input, rate);
     const padded = new Float32Array(stretchedLen);
     padded.set(stretched.subarray(0, Math.min(stretched.length, stretchedLen)));
     stretchedBuffer.copyToChannel(padded, ch, 0);
