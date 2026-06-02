@@ -1119,7 +1119,7 @@ async function startPreview() {
     const source = ctx.createBufferSource();
     const rate = Math.pow(2, layer.pitchSemitones / 12);
     // Use stretched buffer so pitch shifts without changing duration
-    source.buffer = buildStretchedBuffer(layer, ctx);
+    source.buffer = await buildStretchedBuffer(layer, ctx);
     source.playbackRate.value = rate;
 
     const gainNode = ctx.createGain();
@@ -1186,7 +1186,7 @@ async function startPreview() {
 }
 
 // ── Composition-level loop restart ─────────────────────
-function scheduleCompositionRestart() {
+async function scheduleCompositionRestart() {
   const ctx = getAudioCtx();
   const now = ctx.currentTime;
   const hasAnySolo = state.layers.some(l => l.solo);
@@ -1200,7 +1200,7 @@ function scheduleCompositionRestart() {
     const source = ctx.createBufferSource();
     const rate = Math.pow(2, layer.pitchSemitones / 12);
     // Use stretched buffer so pitch shifts without changing duration
-    source.buffer = buildStretchedBuffer(layer, ctx);
+    source.buffer = await buildStretchedBuffer(layer, ctx);
     source.playbackRate.value = rate;
 
     const gainNode = ctx.createGain();
@@ -1430,7 +1430,7 @@ async function startPreviewFrom(seekTime) {
     const source = ctx.createBufferSource();
     const rate = Math.pow(2, layer.pitchSemitones / 12);
     // Use stretched buffer so pitch shifts without changing duration
-    source.buffer = buildStretchedBuffer(layer, ctx);
+    source.buffer = await buildStretchedBuffer(layer, ctx);
     source.playbackRate.value = rate;
 
     const gainNode = ctx.createGain();
@@ -1581,7 +1581,85 @@ function wrapPhase(delta) {
   return ((delta + Math.PI) % (2 * Math.PI + 1e-9)) - Math.PI;
 }
 
-// ── Phase Vocoder Time Stretch ──────────────────────────
+// Rubber Band WASM lazy initializer
+let rbApi = null;
+let rbInitPromise = null;
+
+async function getRbApi() {
+  if (rbApi) return rbApi;
+  if (rbInitPromise) return rbInitPromise;
+  rbInitPromise = (async () => {
+    const response = await fetch('vendor/rubberband.wasm');
+    const wasm = await WebAssembly.compileStreaming(response);
+    rbApi = await rubberband.RubberBandInterface.initialize(wasm);
+    return rbApi;
+  })();
+  return rbInitPromise;
+}
+
+// Rubber Band time stretch (preserves pitch, changes duration)
+async function rubberBandStretch(input, factor, sampleRate) {
+  const api = await getRbApi();
+  const outLen = Math.floor(input.length * factor);
+
+  const options = rubberband.RubberBandOption.RubberBandOptionProcessOffline
+                | rubberband.RubberBandOption.RubberBandOptionPitchHighQuality
+                | rubberband.RubberBandOption.RubberBandOptionEngineFiner;
+
+  const rbState = api.rubberband_new(sampleRate, 1, options, factor, 1.0);
+  const samplesRequired = api.rubberband_get_samples_required(rbState);
+
+  const inputPtr = api.malloc(samplesRequired * 4);
+  const channelArrayPtr = api.malloc(4);
+  api.memWritePtr(channelArrayPtr, inputPtr);
+
+  // Study phase
+  let read = 0;
+  while (read < input.length) {
+    const remaining = Math.min(samplesRequired, input.length - read);
+    api.memWrite(inputPtr, input.subarray(read, read + remaining));
+    const isFinal = read + remaining >= input.length ? 0 : 1;
+    api.rubberband_study(rbState, channelArrayPtr, remaining, isFinal);
+    read += remaining;
+  }
+
+  // Process phase
+  const output = new Float32Array(outLen);
+  read = 0;
+  let write = 0;
+
+  while (read < input.length) {
+    const remaining = Math.min(samplesRequired, input.length - read);
+    api.memWrite(inputPtr, input.subarray(read, read + remaining));
+    const isFinal = read + remaining >= input.length ? 0 : 1;
+    api.rubberband_process(rbState, channelArrayPtr, remaining, isFinal);
+
+    while (true) {
+      const available = api.rubberband_available(rbState);
+      if (available < 1) break;
+      const recv = api.rubberband_retrieve(rbState, channelArrayPtr, Math.min(samplesRequired, available));
+      output.set(api.memReadF32(inputPtr, recv), write); // reuse inputPtr as output read buffer
+      write += recv;
+    }
+    read += remaining;
+  }
+
+  // Final retrieve
+  while (true) {
+    const available = api.rubberband_available(rbState);
+    if (available < 1) break;
+    const recv = api.rubberband_retrieve(rbState, channelArrayPtr, samplesRequired);
+    output.set(api.memReadF32(inputPtr, recv), write);
+    write += recv;
+  }
+
+  api.free(inputPtr);
+  api.free(channelArrayPtr);
+  api.rubberband_delete(rbState);
+  return output;
+}
+
+// ── Phase Vocoder Time Stretch (fallback) ───────────────
 function phaseVocoderStretch(input, factor) {
   const inLen = input.length;
   const outLen = Math.floor(inLen * factor);
@@ -1697,10 +1775,10 @@ function phaseVocoderStretch(input, factor) {
   return output;
 }
 
-// ── Build phase-vocoder-stretched AudioBuffer for pitch-preserving preview ──
-// Returns a buffer rate× longer (same pitch via phase vocoder) so that when played
+// ── Build stretched AudioBuffer (Rubber Band WASM with phase vocoder fallback) ──
+// Returns a buffer rate× longer (same pitch) so that when played
 // back at playbackRate=rate, the pitch shifts while duration stays correct.
-function buildStretchedBuffer(layer, ctx) {
+async function buildStretchedBuffer(layer, ctx) {
   const rate = Math.pow(2, layer.pitchSemitones / 12);
   if (Math.abs(rate - 1) < 0.001) return layer.buffer;
 
@@ -1716,7 +1794,12 @@ function buildStretchedBuffer(layer, ctx) {
   const stretchedBuf = ctx.createBuffer(channels, stretchedLen, ctx.sampleRate);
   for (let ch = 0; ch < channels; ch++) {
     const input = layer.buffer.getChannelData(ch);
-    const stretched = phaseVocoderStretch(input, rate);
+    let stretched;
+    try {
+      stretched = await rubberBandStretch(input, rate, ctx.sampleRate);
+    } catch {
+      stretched = phaseVocoderStretch(input, rate);
+    }
     const padded = new Float32Array(stretchedLen);
     padded.set(stretched.subarray(0, Math.min(stretched.length, stretchedLen)));
     stretchedBuf.copyToChannel(padded, ch, 0);
@@ -1743,7 +1826,12 @@ async function pitchShiftBuffer(buffer, semitones) {
 
   for (let ch = 0; ch < channels; ch++) {
     const input = buffer.getChannelData(ch);
-    const stretched = phaseVocoderStretch(input, rate);
+    let stretched;
+    try {
+      stretched = await rubberBandStretch(input, rate, sr);
+    } catch {
+      stretched = phaseVocoderStretch(input, rate);
+    }
     const padded = new Float32Array(stretchedLen);
     padded.set(stretched.subarray(0, Math.min(stretched.length, stretchedLen)));
     stretchedBuffer.copyToChannel(padded, ch, 0);
