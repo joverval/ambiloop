@@ -1600,7 +1600,6 @@ async function getRbApi() {
 // Rubber Band time stretch (preserves pitch, changes duration)
 async function rubberBandStretch(input, factor, sampleRate) {
   const api = await getRbApi();
-  const outLen = Math.floor(input.length * factor);
 
   const options = rubberband.RubberBandOption.RubberBandOptionProcessOffline
                 | rubberband.RubberBandOption.RubberBandOptionPitchHighQuality
@@ -1618,20 +1617,22 @@ async function rubberBandStretch(input, factor, sampleRate) {
   while (read < input.length) {
     const remaining = Math.min(samplesRequired, input.length - read);
     api.memWrite(inputPtr, input.subarray(read, read + remaining));
-    const isFinal = read + remaining >= input.length ? 0 : 1;
-    api.rubberband_study(rbState, channelArrayPtr, remaining, isFinal);
     read += remaining;
+    const isFinal = read >= input.length ? 1 : 0;
+    api.rubberband_study(rbState, channelArrayPtr, remaining, isFinal);
   }
 
-  // Process phase
-  const output = new Float32Array(outLen);
+  // Process phase — Rubber Band may produce slightly more/less than predicted
+  const maxOut = Math.ceil(input.length * factor) + 8192;
+  const output = new Float32Array(maxOut);
   read = 0;
   let write = 0;
 
   while (read < input.length) {
     const remaining = Math.min(samplesRequired, input.length - read);
     api.memWrite(inputPtr, input.subarray(read, read + remaining));
-    const isFinal = read + remaining >= input.length ? 0 : 1;
+    read += remaining;
+    const isFinal = read >= input.length ? 1 : 0;
     api.rubberband_process(rbState, channelArrayPtr, remaining, isFinal);
 
     while (true) {
@@ -1656,7 +1657,7 @@ async function rubberBandStretch(input, factor, sampleRate) {
   api.free(inputPtr);
   api.free(channelArrayPtr);
   api.rubberband_delete(rbState);
-  return output;
+  return output.subarray(0, write);
 }
 
 // ── Phase Vocoder Time Stretch (fallback) ───────────────
