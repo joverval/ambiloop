@@ -748,7 +748,7 @@ layerList.addEventListener('input', (e) => {
   renderAll();
 });
 
-// Number inputs + selects: update on 'change' (blur/Enter — keeps focus during typing)
+// Number inputs + selects + sliders: update on 'change' (blur/Enter/release — keeps focus during typing/dragging)
 layerList.addEventListener('change', (e) => {
   const action = e.target.dataset.action;
 
@@ -756,16 +756,30 @@ layerList.addEventListener('change', (e) => {
   const tag = e.target.tagName;
   const type = e.target.type;
 
-  // Only handle number inputs and selects here
-  if (!((tag === 'INPUT' && type === 'number') || tag === 'SELECT')) return;
+  // Handle number inputs and selects as before
+  if ((tag === 'INPUT' && type === 'number') || tag === 'SELECT') {
+    const id = parseInt(e.target.dataset.id);
+    const layer = state.layers.find(l => l.id === id);
+    if (!layer) return;
 
-  const id = parseInt(e.target.dataset.id);
-  const layer = state.layers.find(l => l.id === id);
-  if (!layer) return;
+    applyLayerValue(layer, action, e.target.value);
+    pushUndo();
+    renderAll();
 
-  applyLayerValue(layer, action, e.target.value);
-  pushUndo();
-  renderAll();
+    // Pre-warm pitch stretch buffer after user finishes adjusting
+    if (action === 'pitch') {
+      prewarmStretch(layer);
+    }
+    return;
+  }
+
+  // Sliders (range inputs): pre-warm after drag ends
+  if (tag === 'INPUT' && type === 'range' && action === 'pitch') {
+    const id = parseInt(e.target.dataset.id);
+    const layer = state.layers.find(l => l.id === id);
+    if (!layer) return;
+    prewarmStretch(layer);
+  }
 });
 
 layerList.addEventListener('click', (e) => {
@@ -1787,27 +1801,44 @@ async function buildStretchedBuffer(layer, ctx) {
     return layer._stretchedBuffer;
   }
 
+  // Visual feedback — pulse the layer card during computation
+  const card = document.querySelector(`.layer-card[data-id="${layer.id}"]`);
+  if (card) card.classList.add('stretching');
+
   const channels = layer.buffer.numberOfChannels;
   const origLen = layer.buffer.length;
   const stretchedLen = Math.max(1, Math.floor(origLen * rate));
 
   const stretchedBuf = ctx.createBuffer(channels, stretchedLen, ctx.sampleRate);
-  for (let ch = 0; ch < channels; ch++) {
-    const input = layer.buffer.getChannelData(ch);
-    let stretched;
-    try {
-      stretched = await rubberBandStretch(input, rate, ctx.sampleRate);
-    } catch {
-      stretched = phaseVocoderStretch(input, rate);
+  try {
+    for (let ch = 0; ch < channels; ch++) {
+      const input = layer.buffer.getChannelData(ch);
+      let stretched;
+      try {
+        stretched = await rubberBandStretch(input, rate, ctx.sampleRate);
+      } catch {
+        stretched = phaseVocoderStretch(input, rate);
+      }
+      const padded = new Float32Array(stretchedLen);
+      padded.set(stretched.subarray(0, Math.min(stretched.length, stretchedLen)));
+      stretchedBuf.copyToChannel(padded, ch, 0);
     }
-    const padded = new Float32Array(stretchedLen);
-    padded.set(stretched.subarray(0, Math.min(stretched.length, stretchedLen)));
-    stretchedBuf.copyToChannel(padded, ch, 0);
+  } finally {
+    if (card) card.classList.remove('stretching');
   }
 
   layer._stretchedPitchKey = layer.pitchSemitones;
   layer._stretchedBuffer = stretchedBuf;
   return stretchedBuf;
+}
+
+// Pre-warm the stretched buffer cache in the background (fire-and-forget)
+function prewarmStretch(layer) {
+  const rate = Math.pow(2, layer.pitchSemitones / 12);
+  if (Math.abs(rate - 1) < 0.001) return;
+  if (layer._stretchedPitchKey === layer.pitchSemitones && layer._stretchedBuffer) return;
+  if (!state.audioCtx) return; // no AudioContext yet, will compute on first play
+  buildStretchedBuffer(layer, state.audioCtx).catch(() => {}); // fire & forget
 }
 
 // ── True pitch shift: phase vocoder stretch + playbackRate ────────

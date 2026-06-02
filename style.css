@@ -143,6 +143,11 @@ main {
 }
 .layer-card:hover { border-color: var(--accent); }
 .layer-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.layer-card.stretching { animation: stretch-pulse 0.8s ease-in-out infinite; }
+@keyframes stretch-pulse {
+  0%, 100% { border-color: var(--border); }
+  50% { border-color: var(--accent); }
+}
 
 .layer-header {
   display: flex;
