@@ -1642,7 +1642,6 @@ async function rubberBandStretch(input, factor, sampleRate) {
       output.set(api.memReadF32(inputPtr, recv), write); // reuse inputPtr as output read buffer
       write += recv;
     }
-    read += remaining;
   }
 
   // Final retrieve
